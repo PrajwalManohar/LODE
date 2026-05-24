@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply antialiased;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    @apply bg-ink-50 text-ink-900 font-sans min-h-screen;
+    font-feature-settings: "cv11", "ss01", "ss03", "cv02";
+    letter-spacing: -0.011em;
+  }
+  h1, h2, h3, h4 {
+    @apply font-display tracking-tight text-ink-900;
+    font-feature-settings: "ss01";
+  }
+  /* Tabular numerals for any monospace block */
+  code, kbd, pre, samp, .font-mono {
+    font-feature-settings: "tnum", "calt" 0;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white border border-ink-200 rounded-xl shadow-card;
+  }
+  .card-pad {
+    @apply card p-5;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium
+      border border-ink-200 bg-white text-ink-800 hover:bg-ink-50 hover:border-ink-300 transition;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold
+      bg-navy-800 text-white hover:bg-navy-700 transition disabled:opacity-50 disabled:cursor-not-allowed shadow-sm;
+  }
+  .btn-gold {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold
+      bg-gold-500 text-navy-900 hover:bg-gold-400 transition disabled:opacity-50 shadow-sm;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-ink-600 hover:bg-ink-100 transition;
+  }
+  .input {
+    @apply w-full bg-white border border-ink-200 rounded-lg px-3 py-2 text-sm text-ink-900
+      placeholder:text-ink-400 focus:outline-none focus:ring-2 focus:ring-navy-500/30 focus:border-navy-500 transition;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium;
+  }
+  .pill-ok      { @apply pill bg-ok-50      text-ok-700; }
+  .pill-warn    { @apply pill bg-warn-50    text-warn-700; }
+  .pill-danger  { @apply pill bg-danger-50  text-danger-700; }
+  .pill-info    { @apply pill bg-info-50    text-info-700; }
+  .pill-cite    { @apply pill bg-cite-50    text-cite-700; }
+  .pill-muted   { @apply pill bg-ink-100    text-ink-600; }
+
+  .section-label {
+    @apply text-[11px] font-semibold tracking-wider text-ink-500 uppercase;
+  }
+}
+
+/* Light scrollbars */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: #cbd5e1; background-clip: content-box; border: 2px solid transparent; }
+
+/* Selection */
+::selection { background: rgba(200, 158, 84, 0.25); color: #0f172a; }

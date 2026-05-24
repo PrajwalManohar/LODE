@@ -1,0 +1,28 @@
+# VEIN 2.0 Backend
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-anthropic>=0.3.0
+langchain-community>=0.3.0
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
+pymupdf>=1.24.0
+python-docx>=1.1.0
+pydantic>=2.6.0
+pydantic-settings>=2.2.0
+python-dotenv>=1.0.0
+httpx>=0.27.0
+python-multipart>=0.0.9
+# Supabase / Postgres (Phase 1: JWT verify · Phase 2: data layer).
+# Backend talks to Postgres via psycopg; auth/realtime live in the frontend
+# (supabase-js), so the heavy `supabase` python package is intentionally omitted.
+PyJWT>=2.9.0
+psycopg[binary]>=3.2.0
+psycopg-pool>=3.2.0
+pgvector>=0.3.0
+# Robust IANA timezone detection across Windows/macOS/Linux for the LODE
+# scheduler & email formatter (see vein.config.LOCAL_TZ_NAME).
+tzlocal>=5.2
+# Monthly utilization report cron — fires on the 1st at 07:00 local.
+APScheduler>=3.10
