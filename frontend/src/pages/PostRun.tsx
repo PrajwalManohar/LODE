@@ -1,12 +1,33 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, AlertCircle, Loader2, XCircle } from "lucide-react";
 import { api } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { PageBody, PageHeader } from "../components/PageShell";
 
 export default function PostRun() {
   const qc = useQueryClient();
-  const { data: bookings = [] } = useQuery({ queryKey: ["bookings"], queryFn: api.bookings });
+  const { profile, user, isAdmin } = useAuth();
+  const userEmail = (profile?.email || user?.email || "").trim();
+
+  // Privacy scoping — non-admins only see their own bookings; admins see all.
+  const { data: bookings = [] } = useQuery({
+    queryKey: isAdmin ? ["bookings"] : ["my-bookings", userEmail],
+    queryFn: isAdmin ? api.bookings : () => api.myBookings(userEmail),
+    enabled: isAdmin || !!userEmail,
+  });
+
+  // Post-run only makes sense for sessions that have already happened, so
+  // future-dated bookings are shown but disabled.
+  const now = Date.now();
+  const bookingChoices = useMemo(
+    () => [...bookings].sort(
+      (a, b) => new Date(String(b.start_time)).getTime() - new Date(String(a.start_time)).getTime(),
+    ),
+    [bookings],
+  );
+  const isPast = (b: Record<string, unknown>) =>
+    new Date(String(b.start_time)).getTime() <= now;
 
   const [bookingId, setBookingId] = useState("");
   const [ranAsPlanned, setRanAsPlanned] = useState(true);
@@ -17,12 +38,14 @@ export default function PostRun() {
   const [result, setResult] = useState<{ message: string; maintenance_alert: boolean } | null>(null);
 
   useEffect(() => {
-    if (!bookingId && bookings.length > 0) {
-      const last = bookings[bookings.length - 1];
-      setBookingId(String(last.id));
-      if (last.researcher_name) setResearcher(String(last.researcher_name));
+    if (!bookingId && bookingChoices.length > 0) {
+      // Default to the most recent PAST booking so the form lands on a valid choice.
+      const target = bookingChoices.find(isPast) ?? bookingChoices[0];
+      setBookingId(String(target.id));
+      if (target.researcher_name) setResearcher(String(target.researcher_name));
     }
-  }, [bookings, bookingId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookingChoices, bookingId]);
 
   useEffect(() => {
     if (!result) return;
@@ -69,18 +92,28 @@ export default function PostRun() {
           className="card-pad space-y-5"
           onSubmit={(e) => { e.preventDefault(); submit.mutate(); }}
         >
-          <Field label="Booking">
-            {bookings.length > 0 ? (
+          <Field label={isAdmin ? "Booking (any researcher)" : "Your booking"}>
+            {bookingChoices.length > 0 ? (
               <select className="input" value={bookingId} onChange={(e) => setBookingId(e.target.value)}>
-                {bookings.map((b) => (
-                  <option key={String(b.id)} value={String(b.id)}>
-                    #{String(b.id)} · {String(b.instrument_name ?? b.instrument_id)} ·{" "}
-                    {new Date(String(b.start_time)).toLocaleString()}
-                  </option>
-                ))}
+                {bookingChoices.map((b) => {
+                  const future = !isPast(b);
+                  return (
+                    <option
+                      key={String(b.id)}
+                      value={String(b.id)}
+                      disabled={future}
+                    >
+                      #{String(b.id)} · {String(b.instrument_name ?? b.instrument_id)} ·{" "}
+                      {new Date(String(b.start_time)).toLocaleString()}
+                      {future ? " — future (post-run not yet allowed)" : ""}
+                    </option>
+                  );
+                })}
               </select>
             ) : (
-              <input className="input" value={bookingId} onChange={(e) => setBookingId(e.target.value)} placeholder="No bookings yet" />
+              <p className="text-sm text-ink-500 italic">
+                You don't have any past bookings yet. Book a session first, then submit the post-run report after it runs.
+              </p>
             )}
           </Field>
 

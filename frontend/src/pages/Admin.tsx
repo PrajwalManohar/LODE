@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+﻿import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Database } from "lucide-react";
 import { api } from "../lib/api";
 import { PageBody, PageHeader } from "../components/PageShell";
@@ -35,7 +35,7 @@ export default function Admin() {
         </div>
 
         <section className="card overflow-hidden">
-          <div className="px-5 py-4 border-b border-ink-200">
+          <div className="card-header">
             <h2 className="text-[15px] font-semibold">Historical run logs (searchable via RAG)</h2>
           </div>
           <table className="w-full text-sm">

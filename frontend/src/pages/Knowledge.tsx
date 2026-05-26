@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+﻿import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, BookOpen, FileText, Loader2 } from "lucide-react";
@@ -87,7 +87,7 @@ export default function Knowledge() {
 
         {(exact.data ?? []).length > 0 && (
           <section className="card overflow-hidden">
-            <header className="px-5 py-4 border-b border-ink-200 flex items-center gap-2">
+            <header className="card-header">
               <BookOpen className="w-4 h-4 text-navy-700" />
               <h2 className="font-display text-[15px] font-semibold">
                 Cited chunk{(exact.data ?? []).length > 1 ? "s" : ""}{" "}
@@ -106,7 +106,7 @@ export default function Knowledge() {
 
         {others.length > 0 && (
           <section className="card overflow-hidden">
-            <header className="px-5 py-4 border-b border-ink-200 flex items-center gap-2">
+            <header className="card-header">
               <FileText className="w-4 h-4 text-ink-600" />
               <h2 className="font-display text-[15px] font-semibold">
                 Other chunks from this source{" "}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -193,7 +193,7 @@ export default function Governance() {
         <div className="grid lg:grid-cols-2 gap-6">
           {/* Instrument utilization */}
           <section className="card overflow-hidden">
-            <div className="px-5 py-4 border-b border-ink-200 flex items-center justify-between">
+            <div className="card-header">
               <h2 className="font-display text-[15px] font-semibold">Instrument utilization</h2>
               <span className="text-xs text-ink-500">Hours used / 160 hr target</span>
             </div>
@@ -219,7 +219,7 @@ export default function Governance() {
 
           {/* Booking equity */}
           <section className="card overflow-hidden">
-            <div className="px-5 py-4 border-b border-ink-200 flex items-center justify-between">
+            <div className="card-header">
               <h2 className="font-display text-[15px] font-semibold">Booking equity by group</h2>
               {equity?.flagged?.length ? (
                 <span className="pill-warn">{equity.flagged.length} flagged</span>
@@ -254,7 +254,7 @@ export default function Governance() {
         <div className="grid lg:grid-cols-3 gap-6">
           {/* Automation activity */}
           <section className="card overflow-hidden lg:col-span-2">
-            <div className="px-5 py-4 border-b border-ink-200 flex items-center justify-between">
+            <div className="card-header">
               <h2 className="font-display text-[15px] font-semibold">Automation activity</h2>
               <span className="pill-ok">Realtime</span>
             </div>
@@ -272,7 +272,7 @@ export default function Governance() {
 
           {/* RAG + agent stats */}
           <section className="card overflow-hidden">
-            <div className="px-5 py-4 border-b border-ink-200 flex items-center justify-between">
+            <div className="card-header">
               <h2 className="font-display text-[15px] font-semibold">Knowledge base</h2>
               <span className="pill-ok">Indexed</span>
             </div>
@@ -324,7 +324,7 @@ function HitlSection({
 
   return (
     <section className="card overflow-hidden">
-      <div className="px-5 py-4 border-b border-ink-200 flex items-center justify-between flex-wrap gap-2">
+      <div className="card-header">
         <div className="flex items-center gap-2.5">
           <ShieldAlert className="w-4 h-4 text-warn-700" />
           <h2 className="font-display text-[15px] font-semibold">Human-in-the-loop queue</h2>
@@ -544,7 +544,7 @@ function MaintenanceSection({
 
   return (
     <section className="card overflow-hidden">
-      <div className="px-5 py-4 border-b border-ink-200">
+      <div className="card-header">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2.5">
             <h2 className="font-display text-[15px] font-semibold">Maintenance work orders</h2>

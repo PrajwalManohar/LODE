@@ -131,6 +131,70 @@ def notify_affected_users_resolved(work_order_id: int, wo: dict) -> list[dict]:
     return sent
 
 
+def notify_affected_users_action(
+    work_order_id: int,
+    wo: dict,
+    *,
+    action: str,
+    detail: str,
+) -> list[dict]:
+    """Generic notification path for non-status work-order activity (notes,
+    team assignments). The researcher gets an in-app event (via
+    record_automation_event so it shows up in the audit feed) and a
+    light-touch email reusing the maintenance template so they know an
+    update happened on their instrument.
+
+    `action` is a short label ("note", "assigned"). `detail` is the human
+    sentence used in both the audit row and the email body.
+    """
+    instrument_id = wo.get("instrument_id")
+    if not instrument_id:
+        return []
+    inst = get_instrument(instrument_id) or {}
+    affected = _affected_bookings(instrument_id, lookahead_days=21)
+    sent: list[dict] = []
+    for b in affected:
+        email = (b.get("researcher_email") or "").strip()
+        if not email:
+            continue
+        try:
+            # Reuse the maintenance-alert email but with the action sentence
+            # — that template already takes a free-form `issue` body, which is
+            # the right shape for "note added" / "assigned" updates.
+            result = send_user_maintenance_alert_email(
+                researcher_email=email,
+                researcher_name=b.get("researcher_name") or "",
+                work_order_code=f"WO-{work_order_id:03d}",
+                instrument=inst.get("name", instrument_id),
+                severity=wo.get("severity", "info"),
+                issue=f"[Workflow update — {action}] {detail}",
+                affected_when=_fmt_slot(b),
+            )
+            sent.append({
+                "booking_id": b.get("id"),
+                "email": email,
+                "transport": result.get("transport"),
+            })
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("workorder-action email failed for %s: %s", email, exc)
+
+    # Always record the in-app automation event, even when no one was emailed
+    # (so admin actions remain visible in the audit feed regardless).
+    record_automation_event(
+        kind="work_order",
+        status=action,
+        target=f"WO-{work_order_id:03d}",
+        detail=detail,
+        payload={
+            "work_order_id": work_order_id,
+            "action": action,
+            "instrument_id": instrument_id,
+            "notified": sent,
+        },
+    )
+    return sent
+
+
 def _recommend_action(instrument_id: str, issue: str) -> tuple[str, str]:
     """Returns (recommended_action, citation_str)."""
     chunks = query_corpus(

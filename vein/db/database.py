@@ -175,6 +175,36 @@ def _resolve_user_id_by_email(conn, email: str) -> Optional[str]:
     return row["id"] if row else None
 
 
+def get_booking(booking_id: int) -> Optional[dict]:
+    """Fetch a single booking row by id."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM bookings WHERE id = %s", (booking_id,)
+        ).fetchone()
+    return row_to_dict(row) if row else None
+
+
+def update_booking_time(booking_id: int, new_start: datetime, new_end: datetime) -> Optional[dict]:
+    """Move an existing booking to a new slot. Returns the updated row."""
+    with get_conn() as conn:
+        row = conn.execute(
+            """UPDATE bookings SET start_time = %s, end_time = %s
+               WHERE id = %s RETURNING *""",
+            (new_start, new_end, booking_id),
+        ).fetchone()
+    return row_to_dict(row) if row else None
+
+
+def cancel_booking(booking_id: int) -> Optional[dict]:
+    """Mark a booking as cancelled (soft-delete — keeps the audit trail)."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "UPDATE bookings SET status = 'cancelled' WHERE id = %s RETURNING *",
+            (booking_id,),
+        ).fetchone()
+    return row_to_dict(row) if row else None
+
+
 def create_booking(
     instrument_id: str,
     researcher_name: str,

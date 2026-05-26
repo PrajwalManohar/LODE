@@ -291,4 +291,38 @@ export const api = {
       `/me/requests/${eventId}/complete`,
       { method: "POST", body: JSON.stringify(option ? { option } : {}) },
     ),
+  dismissRequest: (eventId: number, email: string) =>
+    fetchJson<{ ok: boolean; event_id: number; status: string; message: string }>(
+      `/me/requests/${eventId}/dismiss?email=${encodeURIComponent(email)}`,
+      { method: "POST" },
+    ),
+  dismissedIds: (email: string) =>
+    fetchJson<{ event_ids: number[] }>(
+      `/me/requests/dismissed?email=${encodeURIComponent(email)}`,
+    ),
+  dismissWorkOrder: (id: number, email: string) =>
+    fetchJson<{ ok: boolean; work_order_id: number; message: string }>(
+      `/me/work-orders/${id}/dismiss?email=${encodeURIComponent(email)}`,
+      { method: "POST" },
+    ),
+  dismissedWorkOrderIds: (email: string) =>
+    fetchJson<{ work_order_ids: number[] }>(
+      `/me/work-orders/dismissed?email=${encodeURIComponent(email)}`,
+    ),
+  requestBookingEdit: (bookingId: number, email: string, newStart: string, reason?: string) =>
+    fetchJson<{ ok: boolean; event_id: number; message: string }>(
+      `/me/bookings/${bookingId}/request-edit?email=${encodeURIComponent(email)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ new_start_time: newStart, reason }),
+      },
+    ),
+  requestBookingCancel: (bookingId: number, email: string, reason?: string) =>
+    fetchJson<{ ok: boolean; event_id: number; message: string }>(
+      `/me/bookings/${bookingId}/request-cancel?email=${encodeURIComponent(email)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      },
+    ),
 };

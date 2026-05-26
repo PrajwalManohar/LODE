@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -88,6 +88,45 @@ export default function MyRequests() {
     onError: (e: Error) => setToast({ kind: "err", text: e.message || "Confirmation failed" }),
   });
 
+  // Dismissed request IDs — persisted server-side via the audit log so the
+  // "cleared" state follows the user across devices.
+  const { data: dismissedRes } = useQuery({
+    queryKey: ["dismissed-requests", email],
+    queryFn: () => api.dismissedIds(email),
+    enabled: !!email,
+  });
+  const dismissedIds = useMemo(
+    () => new Set(dismissedRes?.event_ids ?? []),
+    [dismissedRes],
+  );
+
+  const dismiss = useMutation({
+    mutationFn: (eventId: number) => api.dismissRequest(eventId, email),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["dismissed-requests", email] });
+      setToast({ kind: "ok", text: "Request cleared from your list." });
+    },
+    onError: (e: Error) => setToast({ kind: "err", text: e.message || "Could not clear request" }),
+  });
+
+  const { data: dismissedWoRes } = useQuery({
+    queryKey: ["dismissed-work-orders", email],
+    queryFn: () => api.dismissedWorkOrderIds(email),
+    enabled: !!email,
+  });
+  const dismissedWoIds = useMemo(
+    () => new Set(dismissedWoRes?.work_order_ids ?? []),
+    [dismissedWoRes],
+  );
+  const dismissWo = useMutation({
+    mutationFn: (id: number) => api.dismissWorkOrder(id, email),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["dismissed-work-orders", email] });
+      setToast({ kind: "ok", text: "Work order cleared from your list." });
+    },
+    onError: (e: Error) => setToast({ kind: "err", text: e.message || "Could not clear work order" }),
+  });
+
   // Auto-complete from email link: /requests?complete=<event_id>
   useEffect(() => {
     const eid = params.get("complete");
@@ -106,8 +145,8 @@ export default function MyRequests() {
     return () => window.clearTimeout(t);
   }, [toast]);
 
-  const hitl = data?.hitl ?? [];
-  const maintenance = data?.maintenance ?? [];
+  const hitl = (data?.hitl ?? []).filter((h) => !dismissedIds.has(h.id));
+  const maintenance = (data?.maintenance ?? []).filter((w) => !dismissedWoIds.has(w.id));
 
   const counts = useMemo(() => ({
     pending: hitl.filter((h) => h.status === "pending").length,
@@ -224,7 +263,7 @@ export default function MyRequests() {
 
         {/* HITL section */}
         <section className="card overflow-hidden">
-          <header className="px-5 py-4 border-b border-ink-200 flex items-center justify-between gap-2">
+          <header className="card-header">
             <h2 className="font-display text-[15px] font-semibold flex items-center gap-2">
               <ShieldAlert className="w-4 h-4 text-warn-700" /> Booking approval requests
             </h2>
@@ -250,7 +289,9 @@ export default function MyRequests() {
                   key={h.id}
                   h={h}
                   onComplete={(option) => complete.mutate({ eventId: h.id, option })}
+                  onDismiss={() => dismiss.mutate(h.id)}
                   pending={complete.isPending}
+                  dismissing={dismiss.isPending}
                 />
               ))}
             </ul>
@@ -259,7 +300,7 @@ export default function MyRequests() {
 
         {/* Maintenance section */}
         <section className="card overflow-hidden">
-          <header className="px-5 py-4 border-b border-ink-200 flex items-center justify-between gap-2">
+          <header className="card-header">
             <h2 className="font-display text-[15px] font-semibold flex items-center gap-2">
               <Wrench className="w-4 h-4 text-purple-700" /> Maintenance affecting my bookings
             </h2>
@@ -272,7 +313,12 @@ export default function MyRequests() {
           ) : (
             <ul className="divide-y divide-ink-200">
               {maintenance.map((w) => (
-                <MaintenanceRow key={w.id} w={w} />
+                <MaintenanceRow
+                  key={w.id}
+                  w={w}
+                  onDismiss={() => dismissWo.mutate(w.id)}
+                  dismissing={dismissWo.isPending}
+                />
               ))}
             </ul>
           )}
@@ -286,11 +332,13 @@ export default function MyRequests() {
 // Rows
 // ============================================================================
 function HitlRow({
-  h, onComplete, pending,
+  h, onComplete, onDismiss, pending, dismissing,
 }: {
   h: AutomationEvent;
   onComplete: (option?: BookingOption) => void;
+  onDismiss: () => void;
   pending: boolean;
+  dismissing: boolean;
 }) {
   const p = parsePayload(h.payload);
   const status = h.status;
@@ -354,6 +402,19 @@ function HitlRow({
             Submitted {new Date(h.created_at).toLocaleString()}
           </p>
         </div>
+        {/* Clear button — only on terminal-state rows (approved / denied / completed).
+            Pending requests cannot be cleared. */}
+        {(status === "approved" || status === "denied" || status === "completed") && (
+          <button
+            onClick={onDismiss}
+            disabled={dismissing}
+            className="btn shrink-0 text-xs"
+            title="Remove this request from your list (audit trail is retained)"
+          >
+            {dismissing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
+            Clear
+          </button>
+        )}
         {status === "approved" && !picking && (
           <div className="flex items-center gap-1.5 shrink-0">
             <button
@@ -429,15 +490,22 @@ function HitlRow({
   );
 }
 
-function MaintenanceRow({ w }: { w: WorkOrder }) {
+function MaintenanceRow({
+  w, onDismiss, dismissing,
+}: {
+  w: WorkOrder;
+  onDismiss: () => void;
+  dismissing: boolean;
+}) {
   const usagePct =
     w.calibration_interval_hours > 0
       ? Math.round((w.usage_hours / w.calibration_interval_hours) * 100)
       : 0;
   const statusPill =
     w.status === "closed" ? "pill-ok" : w.status === "in_progress" ? "pill-info" : "pill-warn";
+  const isClosed = w.status === "closed";
   return (
-    <li className={clsx("px-5 py-4", w.status === "closed" && "opacity-70")}>
+    <li className={clsx("px-5 py-4", isClosed && "opacity-70")}>
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
@@ -474,6 +542,17 @@ function MaintenanceRow({ w }: { w: WorkOrder }) {
             </span>
           </div>
         </div>
+        {isClosed && (
+          <button
+            onClick={onDismiss}
+            disabled={dismissing}
+            className="btn shrink-0 text-xs"
+            title="Remove this closed work order from your list"
+          >
+            {dismissing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
+            Clear
+          </button>
+        )}
       </div>
     </li>
   );

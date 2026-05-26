@@ -515,6 +515,84 @@ def send_user_hitl_denied_email(
 
 
 # --------------------------------------------------------------------------
+# Email 7a — Admin notification: a researcher requested a booking change
+# (reschedule or cancel). Fans out to admins like send_hitl_email and links
+# the approve/deny buttons to the same /governance?hitl=<id> flow.
+# --------------------------------------------------------------------------
+def send_booking_change_request_email(
+    *,
+    action: str,  # "edit" | "cancel"
+    booking_code: str,
+    researcher: str,
+    instrument: str,
+    from_when: str,
+    to_when: str = "",
+    reason: str = "",
+    event_id: int,
+) -> dict:
+    try:
+        from vein.db.database import get_admin_emails
+        admin_list = get_admin_emails()
+    except Exception:  # noqa: BLE001
+        admin_list = []
+    recipients = [r for r in {*admin_list, settings.lab_email_tech} if r]
+    if not recipients:
+        return {"sent": False, "reason": "no admin recipients"}
+    verb = "cancellation" if action == "cancel" else "reschedule"
+    subject = f"Action required: {researcher} requested a {verb} ({booking_code})"
+    approve = f"{T.DASH_URL}/governance?hitl={event_id}&action=approve"
+    deny = f"{T.DASH_URL}/governance?hitl={event_id}&action=deny"
+    html = T.booking_change_request_html(
+        manager="Dr. Morse", action=action, booking_code=booking_code,
+        researcher=researcher, instrument=instrument, from_when=from_when,
+        to_when=to_when, reason=reason, approve_url=approve, deny_url=deny,
+    )
+    text = (
+        f"{researcher} requested a {verb} of booking {booking_code}.\n"
+        f"Instrument: {instrument}\nCurrent slot: {from_when}\n"
+        + (f"Requested new slot: {to_when}\n" if to_when and action != "cancel" else "")
+        + (f"Reason: {reason}\n" if reason else "")
+        + f"\nApprove: {approve}\nDeny: {deny}"
+    )
+    return _dispatch(recipients, subject, text, html, [])
+
+
+# --------------------------------------------------------------------------
+# Email 7b — User notification: an approved booking change was applied.
+# reschedule → "confirmed for the new date"; cancel → "booking removed".
+# No "confirm" CTA — the change is already live by the time this sends.
+# --------------------------------------------------------------------------
+def send_booking_change_applied_email(
+    *,
+    action: str,  # "edit" | "cancel"
+    researcher_email: str,
+    researcher_name: str,
+    booking_code: str,
+    instrument: str,
+    when: str,
+    approver_note: str = "",
+) -> dict:
+    if not researcher_email:
+        return {"sent": False, "reason": "no researcher email"}
+    requests_url = f"{T.DASH_URL}/bookings"
+    if action == "cancel":
+        subject = f"LODE: your booking {booking_code} has been cancelled"
+        lede = (f"Your cancellation request ({booking_code}) was approved. The booking on {instrument} "
+                f"({when}) has been removed and the slot released.")
+    else:
+        subject = f"LODE: your booking {booking_code} is confirmed for the new time"
+        lede = (f"Your reschedule request ({booking_code}) was approved. Your booking on {instrument} "
+                f"is now confirmed for {when}.")
+    html = T.booking_change_applied_html(
+        researcher=researcher_name or "Researcher", action=action,
+        booking_code=booking_code, instrument=instrument, when=when,
+        approver_note=approver_note, requests_url=requests_url,
+    )
+    text = lede + (f"\nSupervisor note: {approver_note}\n" if approver_note else "") + f"\nView: {requests_url}"
+    return _dispatch([researcher_email], subject, text, html, [])
+
+
+# --------------------------------------------------------------------------
 # Email 8 — User-affected maintenance alert
 # --------------------------------------------------------------------------
 def send_user_maintenance_alert_email(

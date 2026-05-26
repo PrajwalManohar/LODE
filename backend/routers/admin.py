@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from vein.db.database import (
     add_work_order_note,
     assign_work_order,
+    cancel_booking,
     find_hitl_by_session,
     get_agent_decisions,
     get_automation_event,
@@ -17,10 +18,12 @@ from vein.db.database import (
     get_work_orders,
     record_automation_event,
     update_automation_event_status,
+    update_booking_time,
     update_work_order_status,
 )
 from vein.rag.indexer import index_corpus
 from vein.services.email import (
+    send_booking_change_applied_email,
     send_user_hitl_approved_email,
     send_user_hitl_denied_email,
     send_user_maintenance_resolved_email,
@@ -163,17 +166,17 @@ def assign_work_order_endpoint(work_order_id: int, body: WorkOrderAssign):
     row = assign_work_order(work_order_id, body.team)
     if not row:
         raise HTTPException(status_code=404, detail="work order not found")
-    # Surface the routing on the live automation feed.
+    # Notify affected researchers (in-app via automation_event + email) so
+    # the assignment surfaces beyond just the admin view.
     try:
-        record_automation_event(
-            kind="work_order",
-            status="assigned",
-            target=f"WO-{work_order_id:03d}",
+        from vein.services.work_order import notify_affected_users_action
+        notify_affected_users_action(
+            work_order_id, row,
+            action="assigned",
             detail=f"Assigned to {body.team}",
-            payload={"work_order_id": work_order_id, "assigned_team": body.team},
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("assign automation_event not recorded: %s", exc)
+        logger.warning("notify_affected_users_action(assigned) failed: %s", exc)
     return row
 
 
@@ -185,6 +188,18 @@ def add_work_order_note_endpoint(work_order_id: int, body: WorkOrderNote):
     row = add_work_order_note(work_order_id, body.author or "Lab admin", text)
     if not row:
         raise HTTPException(status_code=404, detail="work order not found")
+    # Notify affected researchers of the new note (in-app + email).
+    try:
+        from vein.services.work_order import notify_affected_users_action
+        # Truncate the note to a sensible sentence for the audit row / email.
+        snippet = text if len(text) <= 200 else text[:197] + "…"
+        notify_affected_users_action(
+            work_order_id, row,
+            action="note",
+            detail=f"New note from {body.author or 'Lab admin'}: {snippet}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("notify_affected_users_action(note) failed: %s", exc)
     return row
 
 
@@ -234,10 +249,72 @@ def approve_hitl(event_id: int, body: HitlDecision | None = None):
     if event.get("status") in ("approved", "denied", "completed"):
         raise HTTPException(status_code=409, detail=f"already {event['status']}")
     note = (body.note if body else None) or "Approved via dashboard"
+    payload = _payload_dict(event)
+    action = payload.get("action")
+
+    # Booking edit/cancel requests are executed on approval and marked
+    # 'completed' (terminal) so they leave the queue immediately. The
+    # researcher's notification email reflects the actual outcome.
+    if action == "edit_booking":
+        from datetime import datetime as _dt
+        booking_id = int(payload.get("booking_id", 0) or 0)
+        new_start_raw = payload.get("to")
+        new_end_raw = payload.get("to_end")
+        if not (booking_id and new_start_raw and new_end_raw):
+            raise HTTPException(status_code=422, detail="edit_booking payload incomplete")
+        try:
+            new_start = _dt.fromisoformat(new_start_raw)
+            new_end = _dt.fromisoformat(new_end_raw)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=422, detail=f"time parse: {exc}") from exc
+        updated = update_booking_time(booking_id, new_start, new_end)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Booking not found")
+        row = update_automation_event_status(event_id, "completed", detail=f"Booking rescheduled. {note}")
+        # The reschedule is already applied — send a "confirmed for the new time"
+        # email (no confirm CTA), using the new slot we just wrote to the booking.
+        new_when = payload.get("when", "—")
+        try:
+            new_when = f"{new_start:%a, %b %d · %I:%M %p}–{new_end:%I:%M %p}"
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            send_booking_change_applied_email(
+                action="edit",
+                researcher_email=payload.get("researcher_email", ""),
+                researcher_name=payload.get("researcher_name", ""),
+                booking_code=payload.get("booking_code", f"EDIT-{event_id}"),
+                instrument=payload.get("instrument_name", "—"),
+                when=new_when,
+                approver_note=note if note != "Approved via dashboard" else "",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("edit-approved email failed: %s", exc)
+        return {"ok": True, "event": row, "action": "edit_booking", "booking": updated}
+
+    if action == "cancel_booking":
+        booking_id = int(payload.get("booking_id", 0) or 0)
+        cancelled = cancel_booking(booking_id)
+        if not cancelled:
+            raise HTTPException(status_code=404, detail="Booking not found")
+        row = update_automation_event_status(event_id, "completed", detail=f"Booking cancelled. {note}")
+        try:
+            send_booking_change_applied_email(
+                action="cancel",
+                researcher_email=payload.get("researcher_email", ""),
+                researcher_name=payload.get("researcher_name", ""),
+                booking_code=payload.get("booking_code", f"CANCEL-{event_id}"),
+                instrument=payload.get("instrument_name", "—"),
+                when=payload.get("when", "—"),
+                approver_note=note if note != "Approved via dashboard" else "",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("cancel-approved email failed: %s", exc)
+        return {"ok": True, "event": row, "action": "cancel_booking", "booking": cancelled}
+
+    # Default HITL approval path (new-booking requests) — researcher still has
+    # to click "Confirm" to actually create the booking via /api/me/requests.
     row = update_automation_event_status(event_id, "approved", detail=note)
-    # Notify the researcher. This is the second touchpoint they see — they
-    # already got the "pending review" email when the safety gate refused.
-    payload = _payload_dict(row or event)
     try:
         send_user_hitl_approved_email(
             researcher_email=payload.get("researcher_email", ""),

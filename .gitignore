@@ -57,6 +57,7 @@ yarn-error.log*
 
 # ─── Secrets ───────────────────────────────────────────────────────────────
 # Never commit real .env files — .env.example is the template.
+CREDENTIALS_DEMO.md
 .env
 .env.local
 .env.*.local

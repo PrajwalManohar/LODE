@@ -1,0 +1,2 @@
+{"ts": "2026-05-26T02:40:24Z", "event": "workorder.dismiss", "actor": "panand@demo.mines.edu", "subject": "panand@demo.mines.edu", "detail": {"work_order_id": 11, "status": "closed"}}
+{"ts": "2026-05-26T02:59:37Z", "event": "booking.edit_requested", "actor": "panand@demo.mines.edu", "subject": "panand@demo.mines.edu", "detail": {"booking_id": 27, "to": "2026-05-29T15:00:00+00:00"}}

@@ -31,6 +31,16 @@
   .card-pad {
     @apply card p-5;
   }
+  /* Mines-branded uniform card section header. Use as the wrapper that
+     holds the section h2 — keeps every card on every page consistent.
+     Navy-50 wash + a 2 px gold accent bottom border is the Mines palette. */
+  .card-header {
+    @apply px-5 py-3 bg-navy-50 text-navy-900 border-b-2 border-gold-500
+           flex items-center justify-between gap-2;
+  }
+  .card-title {
+    @apply font-display text-[14px] font-semibold tracking-tight text-navy-900;
+  }
   .btn {
     @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium
       border border-ink-200 bg-white text-ink-800 hover:bg-ink-50 hover:border-ink-300 transition;

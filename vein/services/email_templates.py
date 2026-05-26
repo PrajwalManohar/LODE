@@ -512,6 +512,97 @@ def user_hitl_denied_html(
 
 
 # --------------------------------------------------------------------------
+# Email 7a — Admin notification: booking change requested (brown, action required)
+# Fires when a researcher asks to reschedule or cancel an existing booking.
+# Mirrors hitl_approval_html so the approve/deny buttons drive the SAME
+# /governance?hitl=<id>&action=… flow the new-booking requests use.
+# --------------------------------------------------------------------------
+def booking_change_request_html(
+    *, manager: str, action: str, booking_code: str, researcher: str,
+    instrument: str, from_when: str, to_when: str, reason: str,
+    approve_url: str, deny_url: str,
+) -> str:
+    is_cancel = action == "cancel"
+    title = "Cancellation request" if is_cancel else "Reschedule request"
+    rows = [
+        ("Request ID", _e(booking_code)),
+        ("Researcher", _e(researcher)),
+        ("Instrument", _e(instrument)),
+        ("Current slot", _e(from_when)),
+    ]
+    if not is_cancel:
+        rows.append(("Requested new slot", _e(to_when)))
+    rows.append(("Action", f'<span style="color:{AMBER};font-weight:700;">{_e(title)}</span>'))
+    reason_block = ""
+    if reason:
+        reason_block = _alert("Researcher's reason", _e(reason),
+                              bg="#fffbeb", border="#f59e0b", color="#92400e")
+    verb = "cancel" if is_cancel else "reschedule"
+    inner = (
+        _header(BROWN, pill_label="● Action required")
+        + _body_open()
+        + _greeting(
+            manager,
+            f"{_e(researcher)} has requested to {verb} an existing booking. Approve to apply the change "
+            "immediately, or deny to keep the booking unchanged. The researcher is emailed either way.",
+        )
+        + _kv_table(rows, striped=False)
+        + reason_block
+        + _two_buttons(("Approve change", approve_url), ("Deny change", deny_url))
+        + _body_close()
+        + _footer("Raised from the researcher's My schedule page. This change has not been applied yet.")
+    )
+    return _document(inner)
+
+
+# --------------------------------------------------------------------------
+# Email 7b — User notification: booking change applied (reschedule=green, cancel=crimson)
+# Sent after an admin APPROVES a change request. The change is already applied,
+# so there is no "confirm" CTA — the email just states the outcome.
+# --------------------------------------------------------------------------
+def booking_change_applied_html(
+    *, researcher: str, action: str, booking_code: str, instrument: str,
+    when: str, approver_note: str, requests_url: str,
+) -> str:
+    is_cancel = action == "cancel"
+    if is_cancel:
+        color, pill = "#9f1239", "✕ Cancelled"
+        status = '<span style="color:#b91c1c;font-weight:700;">Cancelled &mdash; slot released</span>'
+        when_label = "Released slot"
+        lede = ("Your supervisor approved your cancellation request. The booking below has been removed "
+                "from the schedule and the slot released back to the pool — no further action is needed.")
+        note_bg, note_border, note_color, icon = "#fef2f2", "#dc2626", "#7f1d1d", "&#10005;"
+    else:
+        color, pill = GREEN, "✓ Rescheduled"
+        status = '<span style="color:#15803d;font-weight:700;">Confirmed &mdash; new time</span>'
+        when_label = "New confirmed slot"
+        lede = ("Your supervisor approved your reschedule request. Your booking is now confirmed for the "
+                "new time below — no further action is needed.")
+        note_bg, note_border, note_color, icon = "#ecfdf5", "#10b981", "#065f46", "&#10003;"
+    rows = [
+        ("Request ID", _e(booking_code)),
+        ("Instrument", _e(instrument)),
+        (when_label, _e(when)),
+        ("Status", status),
+    ]
+    note_block = ""
+    if approver_note:
+        note_block = _alert("Note from your supervisor", _e(approver_note),
+                            bg=note_bg, border=note_border, color=note_color, icon=icon)
+    inner = (
+        _header(color, pill_label=pill)
+        + _body_open()
+        + _greeting(researcher, lede)
+        + _kv_table(rows, striped=False)
+        + note_block
+        + _button("Open My schedule", requests_url, color, "#ffffff")
+        + _body_close()
+        + _footer("This change has already been applied. Contact your lab manager with any questions.")
+    )
+    return _document(inner)
+
+
+# --------------------------------------------------------------------------
 # Email 8 — User notification: maintenance affecting your booking (purple)
 # --------------------------------------------------------------------------
 def user_maintenance_alert_html(

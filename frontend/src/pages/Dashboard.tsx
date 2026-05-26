@@ -1,9 +1,9 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
   Plus, FileText, CalendarDays, MapPin, Megaphone, ExternalLink,
-  Lightbulb, Sparkles, FlaskConical, Users, Bell, ShieldCheck,
+  Lightbulb, Sparkles, FlaskConical, Bell, ShieldCheck,
   ChevronDown, FileDown, GraduationCap, Activity, ListChecks,
 } from "lucide-react";
 import clsx from "clsx";
@@ -42,10 +42,6 @@ export default function Dashboard() {
   });
   const { data: myBookings = [] } = useQuery({
     queryKey: ["my-bookings", userEmail], queryFn: () => api.myBookings(userEmail),
-    enabled: !isAdmin && !!userEmail,
-  });
-  const { data: labDay = [] } = useQuery({
-    queryKey: ["lab-day", userEmail], queryFn: () => api.labDay(userEmail),
     enabled: !isAdmin && !!userEmail,
   });
   const { data: util = [] } = useQuery({ queryKey: ["utilization"], queryFn: api.utilization, enabled: isAdmin });
@@ -123,7 +119,7 @@ export default function Dashboard() {
         <div className="grid lg:grid-cols-2 gap-6">
           {/* Instrument status — public */}
           <section className="card overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-ink-200">
+            <div className="card-header">
               <h2 className="text-[15px] font-semibold">Instrument status</h2>
               <Link to="/instruments" className="text-sm text-navy-700 hover:underline">View all</Link>
             </div>
@@ -154,36 +150,16 @@ export default function Dashboard() {
               bookings={(allBookings as Booking[]).filter((b) => isToday(b.start_time))}
               emptyText="No bookings scheduled for today." showResearcher />
           ) : (
-            <div className="space-y-6">
-              <BookingCard title="My bookings" to="/requests"
-                bookings={(myBookings as Booking[])}
-                emptyText="You have no bookings yet — start one from Book a session." />
-              <section className="card overflow-hidden">
-                <div className="flex items-center justify-between px-5 py-4 border-b border-ink-200">
-                  <h2 className="text-[15px] font-semibold flex items-center gap-2">
-                    <Users className="w-4 h-4 text-navy-600" /> Today in your lab
-                  </h2>
-                </div>
-                {(labDay as Booking[]).length === 0 ? (
-                  <div className="px-5 py-8 text-center text-ink-500 text-sm">
-                    No other sessions today at the labs where you have a booking.
-                  </div>
-                ) : (
-                  <ul className="divide-y divide-ink-200">
-                    {(labDay as Booking[]).map((b) => (
-                      <BookingRow key={String(b.id)} b={b} showResearcher showLocation />
-                    ))}
-                  </ul>
-                )}
-              </section>
-            </div>
+            <BookingCard title="My bookings" to="/requests"
+              bookings={(myBookings as Booking[])}
+              emptyText="You have no bookings yet — start one from Book a session." />
           )}
         </div>
 
         {/* Campus & Facility — engaging, AI-digested, all users (moved below the working surface) */}
         {feed && (
           <section className="card overflow-hidden">
-            <div className="px-5 py-4 border-b border-ink-200 flex items-center justify-between gap-2">
+            <div className="card-header">
               <h2 className="font-display text-[15px] font-semibold flex items-center gap-2">
                 <Megaphone className="w-4 h-4 text-gold-600" /> Campus &amp; facility
               </h2>
@@ -277,7 +253,7 @@ function BookingCard({
 }) {
   return (
     <section className="card overflow-hidden">
-      <div className="flex items-center justify-between px-5 py-4 border-b border-ink-200">
+      <div className="card-header">
         <h2 className="text-[15px] font-semibold">{title}</h2>
         <Link to={to} className="text-sm text-navy-700 hover:underline">View all</Link>
       </div>
@@ -337,25 +313,27 @@ function KpiTile({
       aria-expanded={active}
       aria-controls={`kpi-breakdown-${tileKey}`}
       className={clsx(
-        "card-pad text-left transition relative w-full",
+        "card overflow-hidden text-left transition relative w-full",
         "hover:border-navy-400 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-navy-500/40",
         active && "ring-2 ring-navy-700 border-navy-500",
       )}
     >
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-sm text-ink-500">{label}</p>
+      <div className="card-header">
+        <span className="card-title text-[11px] tracking-wider uppercase">{label}</span>
         <ChevronDown
           className={clsx(
-            "w-4 h-4 text-ink-400 shrink-0 transition-transform",
-            active && "rotate-180 text-navy-700",
+            "w-4 h-4 text-navy-700/70 shrink-0 transition-transform",
+            active && "rotate-180 text-navy-900",
           )}
         />
       </div>
-      <p className="text-[28px] font-bold text-ink-900 mt-1 leading-none tracking-tight">{value}</p>
-      <p className="text-xs mt-2">{sub}</p>
-      <p className="text-[10px] text-ink-400 mt-1.5 tracking-wide uppercase">
-        {active ? "Hide details" : "Click for breakdown"}
-      </p>
+      <div className="px-5 py-4">
+        <p className="text-[28px] font-bold text-ink-900 leading-none tracking-tight">{value}</p>
+        <p className="text-xs mt-2">{sub}</p>
+        <p className="text-[10px] text-ink-400 mt-1.5 tracking-wide uppercase">
+          {active ? "Hide details" : "Click for breakdown"}
+        </p>
+      </div>
     </button>
   );
 }
