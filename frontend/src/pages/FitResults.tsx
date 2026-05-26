@@ -41,7 +41,24 @@ export default function FitResults() {
 
   const confirm = useMutation({
     mutationFn: (opt: BookingOption) => api.confirm(ctx, opt, picked!, sessionId),
-    onSuccess: (resp) => setConfirmed(resp),
+    onSuccess: (resp) => {
+      // Confirm-time safety re-check refused → route to My Requests so the
+      // user sees the pending HITL entry with admin approval flow.
+      if (resp.escalated) {
+        navigate("/requests", {
+          state: {
+            flash: {
+              kind: "pending",
+              instrument: picked?.instrument_name || "the selected instrument",
+              reasons: resp.safety_gate?.reasons || [],
+              sessionId: resp.session_id,
+            },
+          },
+        });
+        return;
+      }
+      setConfirmed(resp);
+    },
   });
 
   const steps = [

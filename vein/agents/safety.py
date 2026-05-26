@@ -86,17 +86,37 @@ def evaluate_safety_gate(
             f"Fit confidence {confidence}/100 below {CONFIDENCE_FLOOR}% threshold."
         )
 
+    # Manager override marker — set by the My Requests "Complete" path after a
+    # supervisor approved the HITL request. The supervisor has already reviewed
+    # the same reasons we'd raise, so we allow the booking through. We keep the
+    # `reasons` in the result for the audit log so the trail is preserved.
+    if "[approved-by-manager]" in (ctx.notes or ""):
+        return SafetyGateResult(passed=True, requires_review=False, reasons=reasons)
+
     passed = not reasons
     return SafetyGateResult(passed=passed, requires_review=not passed, reasons=reasons)
 
 
 def annotate_hazmat(ctx: ExperimentContext, *extra_texts: str) -> ExperimentContext:
-    """Mutates ctx in place: populates hazardous_materials + hazmat_review_required."""
-    hits = detect_hazardous_materials(
+    """Mutates ctx in place: populates hazardous_materials + hazmat_review_required.
+
+    Two sources feed the gate, merged + deduped:
+      1. Keywords detected in the free-text fields (material, goal, notes, …).
+      2. Anything the researcher *explicitly* listed in the form's "Hazardous
+         materials" field (``ctx.hazardous_materials`` as supplied). Without
+         this, typing a hazard only in that field would not reliably trip the
+         gate, so the brown HITL email would not fire.
+    """
+    detected = detect_hazardous_materials(
         ctx.material_type, ctx.analysis_goal, ctx.notes, ctx.surface_condition,
         ctx.coating_status, *extra_texts,
     )
-    if hits:
-        ctx.hazardous_materials = hits
+    declared = [h.strip() for h in (ctx.hazardous_materials or []) if isinstance(h, str) and h.strip()]
+    merged: list[str] = []
+    for h in [*detected, *declared]:
+        if h not in merged:
+            merged.append(h)
+    if merged:
+        ctx.hazardous_materials = merged
         ctx.hazmat_review_required = True
     return ctx

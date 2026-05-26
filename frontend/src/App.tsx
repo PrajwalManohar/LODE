@@ -4,13 +4,17 @@ import Layout from "./components/Layout";
 import Login from "./pages/Login";
 import Profile from "./pages/Profile";
 import Dashboard from "./pages/Dashboard";
+import IntakeForm from "./pages/IntakeForm";
 import IntakeChat from "./pages/IntakeChat";
+import MyRequests from "./pages/MyRequests";
+import Knowledge from "./pages/Knowledge";
 import Instruments from "./pages/Instruments";
 import Bookings from "./pages/Bookings";
 import Admin from "./pages/Admin";
 import PostRun from "./pages/PostRun";
 import Governance from "./pages/Governance";
 import FitResults from "./pages/FitResults";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { useAuth } from "./lib/auth";
 
 function Splash({ label }: { label: string }) {
@@ -42,6 +46,35 @@ function RequireAdmin({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+/** The signed-in page set, wrapped in an ErrorBoundary that resets on
+ *  navigation so one page's crash never takes down the whole app. */
+function RoutedPages() {
+  const location = useLocation();
+  return (
+    <ErrorBoundary key={location.pathname}>
+      <Routes>
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/intake" element={<IntakeForm />} />
+        <Route path="/intake/chat" element={<IntakeChat />} />
+        <Route path="/requests" element={<MyRequests />} />
+        <Route path="/knowledge" element={<Knowledge />} />
+        <Route path="/fit" element={<FitResults />} />
+        <Route path="/instruments" element={<Instruments />} />
+        <Route path="/bookings" element={<Bookings />} />
+        <Route path="/postrun" element={<PostRun />} />
+        <Route path="/profile" element={<Profile />} />
+        {/* Admin-only */}
+        <Route path="/admin" element={<RequireAdmin><Admin /></RequireAdmin>} />
+        <Route path="/governance" element={<RequireAdmin><Governance /></RequireAdmin>} />
+        <Route path="/audit" element={<RequireAdmin><Governance /></RequireAdmin>} />
+        <Route path="/settings" element={<RequireAdmin><Admin /></RequireAdmin>} />
+        {/* Catch-all — never show "page not found", always land on dashboard */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </ErrorBoundary>
+  );
+}
+
 export default function App() {
   return (
     <Routes>
@@ -51,22 +84,7 @@ export default function App() {
         element={
           <RequireAuth>
             <Layout>
-              <Routes>
-                <Route path="/" element={<Dashboard />} />
-                <Route path="/intake" element={<IntakeChat />} />
-                <Route path="/fit" element={<FitResults />} />
-                <Route path="/instruments" element={<Instruments />} />
-                <Route path="/bookings" element={<Bookings />} />
-                <Route path="/postrun" element={<PostRun />} />
-                <Route path="/profile" element={<Profile />} />
-                {/* Admin-only */}
-                <Route path="/admin" element={<RequireAdmin><Admin /></RequireAdmin>} />
-                <Route path="/governance" element={<RequireAdmin><Governance /></RequireAdmin>} />
-                <Route path="/audit" element={<RequireAdmin><Governance /></RequireAdmin>} />
-                <Route path="/settings" element={<RequireAdmin><Admin /></RequireAdmin>} />
-                {/* Catch-all — never show "page not found", always land on dashboard */}
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
+              <RoutedPages />
             </Layout>
           </RequireAuth>
         }

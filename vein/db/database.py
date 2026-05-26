@@ -44,10 +44,18 @@ def _get_pool():
             raise RuntimeError("DATABASE_URL is not configured; set it in .env")
         from psycopg_pool import ConnectionPool
 
+        # The admin/analytics pages fan out ~8-10 parallel queries (bookings,
+        # utilization, work-orders, automations, hitl, equity, audit) and
+        # re-fire on 15s polling + realtime invalidations. max_size=5 let that
+        # burst exhaust the pool and hit a 30s PoolTimeout (looks like the app
+        # hanging). 12 comfortably covers the fan-out and stays well under
+        # Supabase's transaction-pooler ceiling. timeout fails fast rather than
+        # hanging a request for 30s if it ever does saturate.
         _pool = ConnectionPool(
             settings.database_url,
-            min_size=1,
-            max_size=5,
+            min_size=2,
+            max_size=12,
+            timeout=10.0,
             kwargs={"row_factory": dict_row},
             configure=_configure_connection,
             open=False,
@@ -99,16 +107,72 @@ def get_instrument(instrument_id: str) -> Optional[dict]:
     return row_to_dict(row) if row else None
 
 
-def get_bookings(instrument_id: Optional[str] = None) -> list[dict]:
-    q = "SELECT b.*, i.name as instrument_name FROM bookings b JOIN instruments i ON b.instrument_id = i.id"
-    params: tuple = ()
+def get_bookings(instrument_id: Optional[str] = None, email: Optional[str] = None) -> list[dict]:
+    q = ("SELECT b.*, i.name as instrument_name, i.location as instrument_location "
+         "FROM bookings b JOIN instruments i ON b.instrument_id = i.id")
+    clauses: list[str] = []
+    params: list = []
     if instrument_id:
-        q += " WHERE b.instrument_id = %s"
-        params = (instrument_id,)
+        clauses.append("b.instrument_id = %s")
+        params.append(instrument_id)
+    if email:
+        clauses.append("LOWER(b.researcher_email) = LOWER(%s)")
+        params.append(email)
+    if clauses:
+        q += " WHERE " + " AND ".join(clauses)
     q += " ORDER BY b.start_time"
     with get_conn() as conn:
-        rows = conn.execute(q, params).fetchall()
+        rows = conn.execute(q, tuple(params)).fetchall()
     return [row_to_dict(r) for r in rows]
+
+
+def get_lab_day_bookings(email: str) -> list[dict]:
+    """Today's bookings at every location where this user has any non-cancelled
+    booking — so a researcher can see who else is in their lab today, without
+    being able to see the whole facility's schedule.
+    """
+    mine = get_bookings(email=email)
+    locations = {
+        (b.get("instrument_location") or "").strip()
+        for b in mine
+        if b.get("status") != "cancelled" and (b.get("instrument_location") or "").strip()
+    }
+    if not locations:
+        return []
+    today = datetime.now().date()
+    out: list[dict] = []
+    for b in get_bookings():
+        if b.get("status") == "cancelled":
+            continue
+        if (b.get("instrument_location") or "").strip() not in locations:
+            continue
+        try:
+            if datetime.fromisoformat(b["start_time"]).date() == today:
+                out.append(b)
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
+def get_admin_emails() -> list[str]:
+    """Every profile with role='admin'. Used to fan out HITL approval requests
+    to every admin instead of a single hard-coded address."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT email FROM profiles WHERE role = 'admin' AND email IS NOT NULL"
+        ).fetchall()
+    return [r["email"] for r in rows if r["email"]]
+
+
+def _resolve_user_id_by_email(conn, email: str) -> Optional[str]:
+    """Look up profiles.id (UUID) by email so realtime RLS can match the row
+    back to the signed-in user. Returns None if no matching profile."""
+    if not email:
+        return None
+    row = conn.execute(
+        "SELECT id FROM profiles WHERE lower(email) = lower(%s) LIMIT 1", (email,),
+    ).fetchone()
+    return row["id"] if row else None
 
 
 def create_booking(
@@ -122,6 +186,11 @@ def create_booking(
     user_id: Optional[str] = None,
 ) -> int:
     with get_conn() as conn:
+        # If caller didn't supply user_id (the form path doesn't), look it up
+        # from the email so Supabase realtime push routes the row to the
+        # right authenticated session via the bookings_owner_read policy.
+        if user_id is None:
+            user_id = _resolve_user_id_by_email(conn, researcher_email)
         row = conn.execute(
             """INSERT INTO bookings (instrument_id, researcher_name, researcher_email,
                start_time, end_time, experiment_context, sop_path, user_id)
@@ -327,6 +396,33 @@ def update_work_order_status(work_order_id: int, status: str) -> Optional[dict]:
         row = conn.execute(
             "UPDATE work_orders SET status = %s WHERE id = %s RETURNING *",
             (status, work_order_id),
+        ).fetchone()
+    return row_to_dict(row) if row else None
+
+
+def assign_work_order(work_order_id: int, team: str) -> Optional[dict]:
+    """Route a work order to a responsible team (Lab Tech / Facilities / …)."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "UPDATE work_orders SET assigned_team = %s WHERE id = %s RETURNING *",
+            (team, work_order_id),
+        ).fetchone()
+    return row_to_dict(row) if row else None
+
+
+def add_work_order_note(work_order_id: int, author: str, text: str) -> Optional[dict]:
+    """Append a review comment to the work order's notes (jsonb array).
+
+    Each note is ``{author, text, at}``. Uses jsonb concat so concurrent adds
+    don't clobber each other.
+    """
+    note = {"author": author or "—", "text": text, "at": datetime.now().isoformat()}
+    with get_conn() as conn:
+        row = conn.execute(
+            """UPDATE work_orders
+               SET notes = COALESCE(notes, '[]'::jsonb) || %s::jsonb
+               WHERE id = %s RETURNING *""",
+            (Jsonb([note]), work_order_id),
         ).fetchone()
     return row_to_dict(row) if row else None
 

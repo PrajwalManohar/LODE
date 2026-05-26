@@ -240,12 +240,31 @@ def send_sop_email(
     approved_by: str = "Auto-approved (fit ≥ threshold)",
     checklist: Optional[list[dict]] = None,
     ics_text: Optional[str] = None,
+    fit_rationale: str = "",
+    references: Optional[list[dict]] = None,
 ) -> dict:
     if not sop_path:
         return {"sent": False, "reason": "no SOP path"}
     path = Path(sop_path)
     instrument = instrument or (ctx.material_type or "Instrument")
     subject = f"LODE booking confirmed: {booking_code or ctx.material_type or 'session'} — {instrument}"
+
+    # LLM-generated intro + prep tip, contextual to this booking.
+    try:
+        from vein.services.email_ai import booking_intro
+        from vein.models.experiment import InstrumentFit as _Fit
+        ai = booking_intro(
+            ctx,
+            _Fit(
+                instrument_id="", instrument_name=instrument, fit_score=fit_score,
+                grade=grade or "—", rationale=fit_rationale or "",
+                run_duration_minutes=0,
+            ),
+            when or session_summary,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("booking_intro LLM call failed: %s", exc)
+        ai = {"intro": "", "prep_tip": ""}
 
     html = T.booking_confirmation_html(
         researcher=ctx.researcher_name or "Researcher",
@@ -260,6 +279,9 @@ def send_sop_email(
         checklist=checklist or [],
         sop_filename=path.name,
         ics_filename=f"LODE_Session_{booking_code or 'session'}.ics",
+        intro=ai.get("intro", ""),
+        prep_tip=ai.get("prep_tip", ""),
+        references=references or [],
     )
     text = (
         f"Your lab session has been confirmed.\n\nBooking: {booking_code}\n"
@@ -295,7 +317,15 @@ def send_hitl_email(
     reasoning: list[str],
     event_id: int | None = None,
 ) -> dict:
-    manager_email = settings.lab_email_tech
+    # Fan out to every admin in profiles + lab_email_tech as fallback.
+    # That way any admin can approve, not just whoever owns lab_email_tech.
+    try:
+        from vein.db.database import get_admin_emails
+        admin_list = get_admin_emails()
+    except Exception:  # noqa: BLE001
+        admin_list = []
+    recipients = list({*admin_list, settings.lab_email_tech})  # dedupe
+    recipients = [r for r in recipients if r]
     subject = f"Action required: LODE booking {booking_code} needs your review"
     # If we have a row id in the automation_events table, the link points at
     # /governance?hitl=<id>&action=approve|deny — the Governance page calls
@@ -303,15 +333,20 @@ def send_hitl_email(
     qkey = f"hitl={event_id}" if event_id else f"approve={booking_code}"
     approve = f"{T.DASH_URL}/governance?{qkey}&action=approve"
     deny = f"{T.DASH_URL}/governance?{qkey}&action=deny"
+    try:
+        from vein.services.email_ai import hitl_intro
+        ai_intro = hitl_intro(researcher, instrument, alert_title, alert_text, reasoning)
+    except Exception:
+        ai_intro = ""
     html = T.hitl_approval_html(
         manager="Dr. Morse", booking_code=booking_code, researcher=researcher,
         instrument=instrument, location=location, when=when, experiment=experiment,
         fit_score=fit_score, grade=grade, confidence=confidence, training_status=training_status,
         alert_title=alert_title, alert_text=alert_text, reasoning=reasoning,
-        approve_url=approve, deny_url=deny,
+        approve_url=approve, deny_url=deny, intro=ai_intro,
     )
     text = f"Booking {booking_code} flagged for review.\n{alert_title}: {alert_text}\nApprove: {approve}\nDeny: {deny}"
-    return _dispatch([manager_email], subject, text, html, [])
+    return _dispatch(recipients, subject, text, html, [])
 
 
 # --------------------------------------------------------------------------
@@ -331,7 +366,14 @@ def send_work_order_email(
     anomaly: str,
     actions: list[str],
 ) -> dict:
-    recipients = [settings.lab_email_tech, settings.lab_email_facilities]
+    # Send to lab tech + facilities + every admin so anyone can act.
+    try:
+        from vein.db.database import get_admin_emails
+        admin_list = get_admin_emails()
+    except Exception:  # noqa: BLE001
+        admin_list = []
+    recipients = list({settings.lab_email_tech, settings.lab_email_facilities, *admin_list})
+    recipients = [r for r in recipients if r]
     subject = f"Maintenance required: {work_order_code} — {issue_type}"
     html = T.work_order_html(
         work_order_code=work_order_code, instrument=instrument, location=location,
@@ -369,6 +411,165 @@ def send_monthly_report_email(
     )
     text = f"LODE monthly report — {period}. Bookings: {total_bookings}, SOPs: {sops_generated}, Avg fit: {avg_fit}, Open WOs: {open_work_orders}."
     return _dispatch(recipients, subject, text, html, [])
+
+
+# --------------------------------------------------------------------------
+# Email 5 — User-pending HITL ("your booking is under review")
+# --------------------------------------------------------------------------
+def send_user_hitl_pending_email(
+    *,
+    researcher_email: str,
+    researcher_name: str,
+    booking_code: str,
+    instrument: str,
+    when: str,
+    experiment: str,
+    reasons: list[str],
+    alert_title: str,
+) -> dict:
+    if not researcher_email:
+        return {"sent": False, "reason": "no researcher email"}
+    subject = f"LODE: your booking {booking_code} is awaiting supervisor review"
+    requests_url = f"{T.DASH_URL}/requests"
+    html = T.user_hitl_pending_html(
+        researcher=researcher_name or "Researcher",
+        booking_code=booking_code, instrument=instrument, when=when, experiment=experiment,
+        reasons=reasons or [], alert_title=alert_title or "Manual review required",
+        requests_url=requests_url,
+    )
+    text = (
+        f"Your LODE booking ({booking_code}) is awaiting supervisor review.\n"
+        f"Instrument: {instrument}\nSlot: {when}\n"
+        f"Reasons: {'; '.join(reasons) or 'manual review'}\n"
+        f"Track at: {requests_url}\n"
+        "You will receive another email when a decision is made."
+    )
+    return _dispatch([researcher_email], subject, text, html, [])
+
+
+# --------------------------------------------------------------------------
+# Email 6 — User-approved HITL
+# --------------------------------------------------------------------------
+def send_user_hitl_approved_email(
+    *,
+    researcher_email: str,
+    researcher_name: str,
+    booking_code: str,
+    event_id: int,
+    instrument: str,
+    when: str,
+    experiment: str,
+    approver_note: str = "",
+) -> dict:
+    if not researcher_email:
+        return {"sent": False, "reason": "no researcher email"}
+    subject = f"LODE: your booking {booking_code} has been approved"
+    complete_url = f"{T.DASH_URL}/requests?complete={event_id}"
+    requests_url = f"{T.DASH_URL}/requests"
+    html = T.user_hitl_approved_html(
+        researcher=researcher_name or "Researcher",
+        booking_code=booking_code, instrument=instrument, when=when, experiment=experiment,
+        approver_note=approver_note, complete_url=complete_url, requests_url=requests_url,
+    )
+    text = (
+        f"Good news — your booking ({booking_code}) was approved by your supervisor.\n"
+        f"Instrument: {instrument}\nSlot: {when}\n"
+        + (f"Supervisor note: {approver_note}\n" if approver_note else "")
+        + f"\nClick to confirm: {complete_url}\nOr open My Requests: {requests_url}"
+    )
+    return _dispatch([researcher_email], subject, text, html, [])
+
+
+# --------------------------------------------------------------------------
+# Email 7 — User-denied HITL
+# --------------------------------------------------------------------------
+def send_user_hitl_denied_email(
+    *,
+    researcher_email: str,
+    researcher_name: str,
+    booking_code: str,
+    instrument: str,
+    when: str,
+    experiment: str,
+    reasons: list[str],
+    approver_note: str = "",
+) -> dict:
+    if not researcher_email:
+        return {"sent": False, "reason": "no researcher email"}
+    subject = f"LODE: your booking {booking_code} was denied"
+    requests_url = f"{T.DASH_URL}/requests"
+    intake_url = f"{T.DASH_URL}/intake"
+    html = T.user_hitl_denied_html(
+        researcher=researcher_name or "Researcher",
+        booking_code=booking_code, instrument=instrument, when=when, experiment=experiment,
+        reasons=reasons or [], approver_note=approver_note,
+        requests_url=requests_url, intake_url=intake_url,
+    )
+    text = (
+        f"Your booking ({booking_code}) was denied by your supervisor.\n"
+        f"Reasons: {'; '.join(reasons) or 'see dashboard'}\n"
+        + (f"Supervisor note: {approver_note}\n" if approver_note else "")
+        + f"\nReview: {requests_url}\nStart a new booking: {intake_url}"
+    )
+    return _dispatch([researcher_email], subject, text, html, [])
+
+
+# --------------------------------------------------------------------------
+# Email 8 — User-affected maintenance alert
+# --------------------------------------------------------------------------
+def send_user_maintenance_alert_email(
+    *,
+    researcher_email: str,
+    researcher_name: str,
+    work_order_code: str,
+    instrument: str,
+    severity: str,
+    issue: str,
+    affected_when: str,
+) -> dict:
+    if not researcher_email:
+        return {"sent": False, "reason": "no researcher email"}
+    subject = f"LODE maintenance alert: {instrument} — affects your booking"
+    requests_url = f"{T.DASH_URL}/requests"
+    html = T.user_maintenance_alert_html(
+        researcher=researcher_name or "Researcher",
+        work_order_code=work_order_code, instrument=instrument,
+        severity=severity.capitalize(), issue=issue, affected_when=affected_when,
+        requests_url=requests_url,
+    )
+    text = (
+        f"An instrument you have booked is under maintenance.\n"
+        f"Work order: {work_order_code}\nInstrument: {instrument}\nSeverity: {severity}\n"
+        f"Issue: {issue}\nYour slot: {affected_when}\nTrack: {requests_url}"
+    )
+    return _dispatch([researcher_email], subject, text, html, [])
+
+
+# --------------------------------------------------------------------------
+# Email 9 — User-affected maintenance resolved
+# --------------------------------------------------------------------------
+def send_user_maintenance_resolved_email(
+    *,
+    researcher_email: str,
+    researcher_name: str,
+    work_order_code: str,
+    instrument: str,
+    affected_when: str,
+) -> dict:
+    if not researcher_email:
+        return {"sent": False, "reason": "no researcher email"}
+    subject = f"LODE: {instrument} is back online — your booking can proceed"
+    requests_url = f"{T.DASH_URL}/requests"
+    html = T.user_maintenance_resolved_html(
+        researcher=researcher_name or "Researcher",
+        work_order_code=work_order_code, instrument=instrument,
+        affected_when=affected_when, requests_url=requests_url,
+    )
+    text = (
+        f"{instrument} is back online and your booking ({affected_when}) can proceed.\n"
+        f"Work order {work_order_code} is now closed.\nTrack: {requests_url}"
+    )
+    return _dispatch([researcher_email], subject, text, html, [])
 
 
 # Backwards-compatible alias.

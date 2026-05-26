@@ -36,7 +36,7 @@ from vein.db.database import (
     record_automation_event,
     update_automation_event_status,
 )
-from vein.services.email import send_hitl_email
+from vein.services.email import send_hitl_email, send_user_hitl_pending_email
 from vein.models.experiment import (
     BookingOption,
     ChatResponse,
@@ -305,8 +305,15 @@ def _safety_gate(state: LodeGraphState) -> LodeGraphState:
                 alert_title = "Booking flagged for review"
                 training_status = "—"
 
-            # Persist a pending HITL request first so the approve/deny endpoints
-            # have a row to mutate when the manager clicks the button.
+            # Persist a pending HITL request with the *full* booking state so
+            # an approval can later auto-complete the booking (run_confirm_graph)
+            # without making the user re-enter the form. The payload carries:
+            #   - the structured ExperimentContext
+            #   - the picked InstrumentFit (top)
+            #   - the preferred BookingOption (first slot proposed)
+            slot_payload = None
+            if slot is not None:
+                slot_payload = slot.model_dump(mode="json")
             event_id = record_automation_event(
                 kind="hitl_request",
                 status="pending",
@@ -328,6 +335,10 @@ def _safety_gate(state: LodeGraphState) -> LodeGraphState:
                     "alert_title": alert_title,
                     "alert_text": lead,
                     "reasons": result.reasons,
+                    # The next three are what /requests/{id}/complete replays.
+                    "context": ctx.model_dump(mode="json"),
+                    "recommendation": top.model_dump(mode="json"),
+                    "option": slot_payload,
                 },
             )
 
@@ -347,6 +358,28 @@ def _safety_gate(state: LodeGraphState) -> LodeGraphState:
                 reasoning=result.reasons,
                 event_id=event_id,
             )
+            # Tell the researcher their booking is awaiting review so they don't
+            # think the submission was lost. This is the user-side counterpart
+            # to the supervisor email — same booking_code, same data.
+            try:
+                send_user_hitl_pending_email(
+                    researcher_email=ctx.researcher_email or "",
+                    researcher_name=ctx.researcher_name or "",
+                    booking_code=booking_code,
+                    instrument=top.instrument_name,
+                    when=when_str,
+                    experiment=ctx.analysis_goal or ctx.material_type or "—",
+                    reasons=result.reasons,
+                    alert_title=alert_title,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log_agent_decision(
+                    sid, "safety_gate",
+                    input_summary=f"top={top.instrument_id}",
+                    output_summary=f"user-pending email failed: {exc}",
+                    reasoning="Email transport raised — supervisor still notified.",
+                    confidence=0, rag_chunks=[], citations=[], outcome="escalate",
+                )
             # Stash the new event id on the response so the UI can surface it
             # in the success banner (and link to /governance?hitl=<id>).
             state["hitl_event_id"] = event_id  # type: ignore[typeddict-unknown-key]
@@ -474,3 +507,72 @@ def run_postrun_graph(report: PostRunReport, session_id: Optional[str] = None) -
     """Agent 5 — post-run analysis, RAG re-index, optional work order."""
     sid = session_id or f"sess_{uuid.uuid4().hex[:12]}"
     return process_post_run(report, session_id=sid)
+
+
+def run_form_intake(
+    context: ExperimentContext,
+    session_id: Optional[str] = None,
+) -> ChatResponse:
+    """Form-mode entry: take a structured ExperimentContext, run fit + schedule
+    + safety in one shot, return slot options. Same automations as chat after
+    confirm, just without the back-and-forth.
+
+    This is the path the manual booking form uses. It mirrors what the chat
+    graph does after the context is complete: hazmat annotation → fit → schedule
+    → safety gate (with HITL email + automation_events row if it refuses).
+    """
+    sid = session_id or f"sess_{uuid.uuid4().hex[:12]}"
+    ctx = annotate_hazmat(context.model_copy(deep=True),
+                          " ".join(filter(None, [context.material_type, context.analysis_goal,
+                                                 context.surface_condition, context.coating_status,
+                                                 context.notes])))
+    ctx.is_complete = True
+
+    # Quick RAG query for citations on the form summary card.
+    rag_chunks = query_corpus(
+        f"{ctx.material_type} {ctx.analysis_goal}", n_results=5
+    )
+    citations = [Citation(**c) for c in format_citations(rag_chunks)]
+
+    log_agent_decision(
+        sid, "agent1_context",
+        input_summary=f"form-intake: {ctx.material_type} / {ctx.analysis_goal}",
+        output_summary="structured context accepted",
+        reasoning=f"form-mode (no chat); hazmat={ctx.hazardous_materials}",
+        confidence=90,
+        rag_chunks=rag_chunks,
+        citations=[c.model_dump() for c in citations],
+        outcome="advance",
+    )
+
+    # Reuse the chat graph nodes via direct calls so the same telemetry +
+    # safety_gate behavior fires.
+    state: LodeGraphState = {
+        "session_id": sid,
+        "message": f"[form] {ctx.material_type} · {ctx.analysis_goal}",
+        "history": [],
+        "context": ctx,
+        "rag_chunks": rag_chunks,
+        "citations": citations,
+        "recommendations": [],
+        "booking_options": [],
+        "response_message": "",
+        "needs_clarification": False,
+        "escalated": False,
+    }
+    state = {**state, **_agent2_fit(state)}
+    if not state.get("escalated"):
+        state = {**state, **_agent3_schedule(state)}
+    state = {**state, **_safety_gate(state)}
+
+    return ChatResponse(
+        message=state.get("response_message", "") or "Recommendation ready — review slots and confirm.",
+        context=state.get("context"),
+        recommendations=state.get("recommendations", []),
+        booking_options=state.get("booking_options", []),
+        citations=state.get("citations", []),
+        needs_clarification=False,
+        escalated=state.get("escalated", False),
+        safety_gate=state.get("safety_gate"),
+        session_id=sid,
+    )

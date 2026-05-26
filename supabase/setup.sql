@@ -149,8 +149,12 @@ create table if not exists public.documents (
   created_at    timestamptz not null default now()
 );
 
-create index if not exists documents_embedding_idx
-  on public.documents using ivfflat (embedding vector_cosine_ops) with (lists = 100);
+-- NOTE: at demo corpus scale (tens–hundreds of chunks) we use EXACT cosine
+-- search — an ivfflat index with lists=100 returns too few/zero rows on a tiny
+-- corpus. Re-enable an ivfflat/hnsw index (tuned lists + ivfflat.probes) only
+-- once the corpus grows into the thousands. See migration 0008.
+-- create index if not exists documents_embedding_idx
+--   on public.documents using ivfflat (embedding vector_cosine_ops) with (lists = 100);
 create index if not exists documents_instrument_idx on public.documents(instrument_id);
 create index if not exists documents_corpus_type_idx on public.documents(corpus_type);
 

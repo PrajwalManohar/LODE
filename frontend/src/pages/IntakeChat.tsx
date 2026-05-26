@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import {
   ArrowUp,
   Loader2,
+  Lock,
   ShieldAlert,
   AlertTriangle,
   ArrowRight,
+  ClipboardList,
 } from "lucide-react";
 import clsx from "clsx";
 import { api, ChatResponse, ExperimentContext, Citation } from "../lib/api";
@@ -77,8 +79,9 @@ export default function IntakeChat() {
       material_type: "", analysis_goal: "", sample_dimensions: "", surface_condition: "",
       coating_status: "", urgency: "medium",
       ...(base ?? {}),
-      researcher_name: researcherName,
-      researcher_email: researcherEmail,
+      // Identity is always the signed-in user (locked).
+      researcher_name: authName || researcherName,
+      researcher_email: authEmail || researcherEmail,
       research_group: researchGroup,
       trained_instruments: trained.length ? trained : base?.trained_instruments ?? [],
       notes: base?.notes ?? "",
@@ -122,11 +125,21 @@ export default function IntakeChat() {
   return (
     <>
       <PageHeader
-        title="Book a session"
+        title="Book a session — chat"
         badge={
-          <span className="chip bg-ink-100 text-ink-700">
-            <span className="text-ink-400 mr-1">Session</span>
-            {sessionId ? sessionId.replace("sess_", "").slice(0, 4).toUpperCase() : SESSION_BADGE}
+          <span className="flex items-center gap-2">
+            <Link
+              to="/intake"
+              className="chip bg-ink-100 text-ink-700 hover:bg-ink-200 inline-flex items-center gap-1"
+              title="Switch to the structured form"
+            >
+              <ClipboardList className="w-3.5 h-3.5" />
+              Use form instead
+            </Link>
+            <span className="chip bg-ink-100 text-ink-700">
+              <span className="text-ink-400 mr-1">Session</span>
+              {sessionId ? sessionId.replace("sess_", "").slice(0, 4).toUpperCase() : SESSION_BADGE}
+            </span>
           </span>
         }
         steps={steps}
@@ -135,11 +148,17 @@ export default function IntakeChat() {
       <PageBody>
         {/* Researcher chips */}
         <div className="card-pad grid md:grid-cols-2 lg:grid-cols-4 gap-3">
-          <Field label="Your name">
-            <input className="input" value={researcherName} onChange={(e) => setResearcherName(e.target.value)} />
+          <Field label="Your name (from your account)">
+            <div className="input bg-ink-50 text-ink-700 flex items-center gap-2 cursor-not-allowed">
+              <Lock className="w-3.5 h-3.5 text-ink-400 shrink-0" />
+              <span className="truncate">{authName || "—"}</span>
+            </div>
           </Field>
-          <Field label="Email">
-            <input className="input" type="email" value={researcherEmail} onChange={(e) => setResearcherEmail(e.target.value)} />
+          <Field label="Email (from your account)">
+            <div className="input bg-ink-50 text-ink-700 flex items-center gap-2 cursor-not-allowed">
+              <Lock className="w-3.5 h-3.5 text-ink-400 shrink-0" />
+              <span className="truncate">{authEmail || "—"}</span>
+            </div>
           </Field>
           <Field label="Research group">
             <input className="input" value={researchGroup} onChange={(e) => setResearchGroup(e.target.value)} />

@@ -15,6 +15,10 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-20250514"
+    google_api_key: str = ""
+    google_model: str = "gemini-3.5-flash"
+    # "google" | "anthropic" | "auto" (prefer google, fall back to anthropic).
+    llm_provider: str = "auto"
     embedding_model: str = "all-MiniLM-L6-v2"
     fit_score_threshold: int = 40
     demo_mode: bool = False  # Use rule-based fallbacks when no API key

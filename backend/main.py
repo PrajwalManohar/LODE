@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from vein.bootstrap import bootstrap
 from vein.config import LOCAL_TZ_NAME, OUTPUT_DIR, ensure_dirs
 
-from backend.routers import admin, bookings, chat, instruments, postrun, system
+from backend.routers import admin, bookings, chat, instruments, me, postrun, system
 
 logger = logging.getLogger("backend.main")
 ensure_dirs()
@@ -80,6 +80,7 @@ app.include_router(instruments.router, prefix="/api/instruments", tags=["instrum
 app.include_router(bookings.router, prefix="/api/bookings", tags=["bookings"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(postrun.router, prefix="/api/postrun", tags=["postrun"])
+app.include_router(me.router, prefix="/api/me", tags=["me"])
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/api/files/sops", StaticFiles(directory=str(OUTPUT_DIR)), name="sops")

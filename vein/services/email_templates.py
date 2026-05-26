@@ -207,10 +207,46 @@ def _progress_bar(value: float, limit: float, color: str = "#dc2626") -> str:
 # --------------------------------------------------------------------------
 # Email 1 — Booking confirmation + SOP (navy)
 # --------------------------------------------------------------------------
+def _references_block(references: list[dict]) -> str:
+    """Render RAG references as a labeled list. Each link deep-links into the
+    `/knowledge` page with source/section/page query params so clicking the
+    citation opens the actual cited chunk, not just a generic admin page."""
+    if not references:
+        return ""
+    from urllib.parse import urlencode
+
+    lis = []
+    for i, r in enumerate(references[:8], 1):
+        params = {}
+        if r.get("source"):  params["source"]  = r["source"]
+        if r.get("section"): params["section"] = r["section"]
+        if r.get("page"):    params["page"]    = r["page"]
+        url = f"{DASH_URL}/knowledge?" + urlencode(params)
+        label_parts = []
+        if r.get("source"):  label_parts.append(r["source"])
+        if r.get("section"): label_parts.append(r["section"])
+        if r.get("page"):    label_parts.append(f"p.{r['page']}")
+        label = _e(" — ".join(label_parts) or r.get("label") or r.get("source", ""))
+        lis.append(
+            f'<tr><td valign="top" style="width:22px;color:{CITE};padding:0 6px 8px 0;font-size:12px;font-weight:700;">[{i}]</td>'
+            f'<td valign="top" style="padding:0 0 8px;font-size:12px;line-height:1.5;color:#374151;">'
+            f'<a href="{_e(url)}" style="color:{CITE};text-decoration:none;">{label}</a>'
+            f' <span style="color:#9ca3af;">→ open in knowledge base</span></td></tr>'
+        )
+    return (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        f'style="background:#f7fafc;border:1px solid {BORDER};border-radius:8px;padding:16px;margin:0 0 20px;">'
+        f'<tr><td>{_section_label("RAG references — grounding sources for this SOP")}'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{"".join(lis)}</table>'
+        f'</td></tr></table>'
+    )
+
+
 def booking_confirmation_html(
     *, researcher: str, booking_code: str, instrument: str, location: str,
     when: str, experiment: str, fit_score: int, grade: str, approved_by: str,
     checklist: list[dict], sop_filename: str, ics_filename: str,
+    intro: str = "", prep_tip: str = "", references: list[dict] | None = None,
 ) -> str:
     rows = [
         ("Booking ID", _e(booking_code)),
@@ -220,16 +256,24 @@ def booking_confirmation_html(
         ("Fit score", f"{fit_score} / 100 (Grade {_e(grade)})"),
         ("Approved by", _e(approved_by)),
     ]
+    intro_html = _e(intro) if intro else (
+        "Your lab session has been confirmed. A customized Standard Operating Procedure has been "
+        "generated for your experiment and is attached to this email. Please review it before your session."
+    )
+    prep_block = ""
+    if prep_tip:
+        prep_block = _alert(
+            "Prep tip", _e(prep_tip),
+            bg="#f0f9ff", border="#0284c7", color="#075985", icon="&#128161;",
+        )
     inner = (
         _header(NAVY, wordmark_color=GOLD)
         + _body_open()
-        + _greeting(
-            researcher,
-            "Your lab session has been confirmed. A customized Standard Operating Procedure has been "
-            "generated for your experiment and is attached to this email. Please review it before your session.",
-        )
+        + _greeting(researcher, intro_html)
         + _kv_table(rows)
+        + prep_block
         + _checklist(checklist)
+        + _references_block(references or [])
         + _attachments([("&#128196;", sop_filename), ("&#128197;", ics_filename)])
         + _button("View booking in LODE dashboard", f"{DASH_URL}/bookings", NAVY, GOLD)
         + _body_close()
@@ -245,7 +289,7 @@ def hitl_approval_html(
     *, manager: str, booking_code: str, researcher: str, instrument: str, location: str,
     when: str, experiment: str, fit_score: int, grade: str, confidence: int,
     training_status: str, alert_title: str, alert_text: str, reasoning: list[str],
-    approve_url: str, deny_url: str,
+    approve_url: str, deny_url: str, intro: str = "",
 ) -> str:
     rows = [
         ("Booking ID", _e(booking_code)),
@@ -256,14 +300,14 @@ def hitl_approval_html(
         ("Fit score", f"{fit_score} / 100 (Grade {_e(grade)}) &nbsp;<span style='color:{BROWN};font-weight:600;'>Conf. {confidence}%</span>"),
         ("Training status", _e(training_status)),
     ]
+    intro_html = _e(intro) if intro else (
+        "A booking request has been flagged by the LODE safety gate and requires your manual review "
+        "before it can be confirmed. Please approve or deny using the buttons below."
+    )
     inner = (
         _header(BROWN, pill_label="⚠ Action required")
         + _body_open()
-        + _greeting(
-            manager,
-            "A booking request has been flagged by the LODE safety gate and requires your manual review "
-            "before it can be confirmed. Please approve or deny using the buttons below.",
-        )
+        + _greeting(manager, intro_html)
         + _alert(alert_title, alert_text, bg="#fdf6e3", border="#e0b34d", color="#7a4a0c")
         + _kv_table(rows, striped=False)
         + _bullets(reasoning, bg=LIGHT, border="#c98a3c", color="#374151",
@@ -351,6 +395,183 @@ def _util_bars(items: list[tuple[str, int]]) -> str:
         )
     return (f'{_section_label("Instrument utilization")}'
             f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px;">{"".join(rows)}</table>')
+
+
+# --------------------------------------------------------------------------
+# Email 5 — User notification: HITL pending review (amber)
+# --------------------------------------------------------------------------
+AMBER = "#b45309"
+
+
+def user_hitl_pending_html(
+    *, researcher: str, booking_code: str, instrument: str, when: str, experiment: str,
+    reasons: list[str], alert_title: str, requests_url: str,
+) -> str:
+    rows = [
+        ("Request ID", _e(booking_code)),
+        ("Instrument", _e(instrument)),
+        ("Requested slot", _e(when)),
+        ("Experiment", _e(experiment)),
+        ("Status", '<span style="color:#b45309;font-weight:700;">Awaiting supervisor review</span>'),
+    ]
+    inner = (
+        _header(AMBER, pill_label="⏳ Under review")
+        + _body_open()
+        + _greeting(
+            researcher,
+            "Your booking request has been received but requires supervisor approval before it can be "
+            "confirmed. We have notified your lab manager and you will receive another email when a "
+            "decision is made — typically within one business day.",
+        )
+        + _alert(alert_title, "; ".join(reasons) or "Manual review required.",
+                 bg="#fdf6e3", border="#e0b34d", color="#7a4a0c")
+        + _kv_table(rows, striped=False)
+        + _bullets(reasons, bg=LIGHT, border=AMBER, color="#374151",
+                   label="Why this booking requires review")
+        + _button("Track this request in LODE", requests_url, AMBER, "#ffffff")
+        + _body_close()
+        + _footer("You will be emailed as soon as your supervisor reviews this request.")
+    )
+    return _document(inner)
+
+
+# --------------------------------------------------------------------------
+# Email 6 — User notification: HITL approved (green)
+# --------------------------------------------------------------------------
+def user_hitl_approved_html(
+    *, researcher: str, booking_code: str, instrument: str, when: str, experiment: str,
+    approver_note: str, complete_url: str, requests_url: str,
+) -> str:
+    rows = [
+        ("Request ID", _e(booking_code)),
+        ("Instrument", _e(instrument)),
+        ("Approved slot", _e(when)),
+        ("Experiment", _e(experiment)),
+        ("Status", '<span style="color:#15803d;font-weight:700;">Approved &mdash; ready to confirm</span>'),
+    ]
+    note_block = ""
+    if approver_note:
+        note_block = _alert("Note from your supervisor", _e(approver_note),
+                            bg="#ecfdf5", border="#10b981", color="#065f46", icon="&#10003;")
+    inner = (
+        _header(GREEN, pill_label="✓ Approved")
+        + _body_open()
+        + _greeting(
+            researcher,
+            "Good news — your supervisor has approved your booking. Click the button below to confirm "
+            "the slot. LODE will generate your customized SOP and email you a calendar invite.",
+        )
+        + _kv_table(rows, striped=False)
+        + note_block
+        + _button("Confirm booking now", complete_url, GREEN, "#ffffff")
+        + f'<p style="text-align:center;font-size:12px;color:{GRAY};margin:8px 0 0;">Or open the My Requests page: <a href="{_e(requests_url)}" style="color:{CITE};">{_e(requests_url)}</a></p>'
+        + _body_close()
+        + _footer("This approval expires in 48 hours. After expiry the slot is released back to the pool.")
+    )
+    return _document(inner)
+
+
+# --------------------------------------------------------------------------
+# Email 7 — User notification: HITL denied (red)
+# --------------------------------------------------------------------------
+def user_hitl_denied_html(
+    *, researcher: str, booking_code: str, instrument: str, when: str, experiment: str,
+    reasons: list[str], approver_note: str, requests_url: str, intake_url: str,
+) -> str:
+    rows = [
+        ("Request ID", _e(booking_code)),
+        ("Instrument", _e(instrument)),
+        ("Requested slot", _e(when)),
+        ("Experiment", _e(experiment)),
+        ("Status", '<span style="color:#b91c1c;font-weight:700;">Denied by supervisor</span>'),
+    ]
+    note_block = ""
+    if approver_note:
+        note_block = _alert("Note from your supervisor", _e(approver_note),
+                            bg="#fef2f2", border="#dc2626", color="#7f1d1d", icon="&#10005;")
+    inner = (
+        _header("#9f1239", pill_label="✕ Denied")
+        + _body_open()
+        + _greeting(
+            researcher,
+            "Your supervisor has reviewed and denied this booking request. Please review the reasons "
+            "below and update your experiment plan or training records before resubmitting.",
+        )
+        + _kv_table(rows, striped=False)
+        + note_block
+        + _bullets(reasons, bg=LIGHT, border="#dc2626", color="#374151",
+                   label="Why this request was denied")
+        + _two_buttons(
+            ("View request", requests_url),
+            ("Start a new booking", intake_url),
+        )
+        + _body_close()
+        + _footer("Contact your lab manager if you have questions about this decision.")
+    )
+    return _document(inner)
+
+
+# --------------------------------------------------------------------------
+# Email 8 — User notification: maintenance affecting your booking (purple)
+# --------------------------------------------------------------------------
+def user_maintenance_alert_html(
+    *, researcher: str, work_order_code: str, instrument: str, severity: str,
+    issue: str, affected_when: str, requests_url: str,
+) -> str:
+    rows = [
+        ("Work order", _e(work_order_code)),
+        ("Instrument", _e(instrument)),
+        ("Severity", _e(severity)),
+        ("Your affected slot", _e(affected_when)),
+        ("Status", '<span style="color:#7c3aed;font-weight:700;">Under maintenance</span>'),
+    ]
+    sev_color = "#dc2626" if severity.lower() == "critical" else "#7c3aed"
+    inner = (
+        _header(PURPLE, pill_label="\U0001f527 Maintenance")
+        + _body_open()
+        + _greeting(
+            researcher,
+            "An instrument you have a booking on has been flagged for maintenance. Your session may be "
+            "delayed or rescheduled depending on the work required. We will email you again as soon as "
+            "the work order status changes.",
+        )
+        + _alert("Affected instrument", _e(issue),
+                 bg="#f1effb", border=sev_color, color="#4c1d95")
+        + _kv_table(rows, striped=False)
+        + _button("Track this work order", requests_url, PURPLE, "#ffffff")
+        + _body_close()
+        + _footer("No action is required from you right now. Bookings on this instrument are paused.")
+    )
+    return _document(inner)
+
+
+# --------------------------------------------------------------------------
+# Email 9 — User notification: maintenance resolved (green)
+# --------------------------------------------------------------------------
+def user_maintenance_resolved_html(
+    *, researcher: str, work_order_code: str, instrument: str, affected_when: str,
+    requests_url: str,
+) -> str:
+    rows = [
+        ("Work order", _e(work_order_code)),
+        ("Instrument", _e(instrument)),
+        ("Your slot", _e(affected_when)),
+        ("Status", '<span style="color:#15803d;font-weight:700;">Resolved &mdash; instrument back online</span>'),
+    ]
+    inner = (
+        _header(GREEN, pill_label="✓ Resolved")
+        + _body_open()
+        + _greeting(
+            researcher,
+            "The maintenance work order affecting your booking has been resolved. Your session can "
+            "proceed as scheduled. If you need to reschedule, open My Requests in LODE.",
+        )
+        + _kv_table(rows, striped=False)
+        + _button("Open My Requests", requests_url, GREEN, "#ffffff")
+        + _body_close()
+        + _footer("Thank you for your patience while the instrument was offline.")
+    )
+    return _document(inner)
 
 
 def monthly_report_html(

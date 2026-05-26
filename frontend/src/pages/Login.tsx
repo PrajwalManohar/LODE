@@ -30,6 +30,16 @@ export default function Login() {
     }
   }, [session, loading, nav, fromPath]);
 
+  // Auto-dismiss error / notice banners so the user doesn't have to clear them.
+  useEffect(() => {
+    if (!error && !notice) return;
+    const t = window.setTimeout(() => {
+      setError(null);
+      setNotice(null);
+    }, 6000);
+    return () => window.clearTimeout(t);
+  }, [error, notice]);
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);

@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { CheckCircle2, AlertCircle } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CheckCircle2, AlertCircle, Loader2, XCircle } from "lucide-react";
 import { api } from "../lib/api";
 import { PageBody, PageHeader } from "../components/PageShell";
 
 export default function PostRun() {
+  const qc = useQueryClient();
   const { data: bookings = [] } = useQuery({ queryKey: ["bookings"], queryFn: api.bookings });
 
   const [bookingId, setBookingId] = useState("");
@@ -23,6 +24,12 @@ export default function PostRun() {
     }
   }, [bookings, bookingId]);
 
+  useEffect(() => {
+    if (!result) return;
+    const t = window.setTimeout(() => setResult(null), 12000);
+    return () => window.clearTimeout(t);
+  }, [result]);
+
   const submit = useMutation({
     mutationFn: () =>
       api.postRun({
@@ -34,12 +41,29 @@ export default function PostRun() {
         notes: "",
         researcher_name: researcher,
       }),
-    onSuccess: setResult,
+    onMutate: () => setResult(null),
+    onSuccess: (data) => {
+      setResult(data);
+      // A post-run can open a work order + re-index the corpus — refresh the
+      // surfaces that depend on it so the demo stays consistent.
+      qc.invalidateQueries({ queryKey: ["work-orders"] });
+      qc.invalidateQueries({ queryKey: ["automations"] });
+      qc.invalidateQueries({ queryKey: ["rag"] });
+    },
   });
+
+  useEffect(() => {
+    if (!submit.isError) return;
+    const t = window.setTimeout(() => submit.reset(), 8000);
+    return () => window.clearTimeout(t);
+  }, [submit]);
 
   return (
     <>
-      <PageHeader title="My SOPs · Post-run report" />
+      <PageHeader
+        title="Post-run report"
+        subtitle="Log how your session went — Agent 5 records the run, re-indexes the knowledge base, and opens a maintenance work order if anomalies are detected."
+      />
       <PageBody className="max-w-3xl">
         <form
           className="card-pad space-y-5"
@@ -100,10 +124,39 @@ export default function PostRun() {
             />
           </Field>
 
-          <button type="submit" className="btn-primary w-full" disabled={submit.isPending}>
-            Submit post-run report
+          <button
+            type="submit"
+            className="btn-primary w-full"
+            disabled={submit.isPending || !bookingId}
+          >
+            {submit.isPending ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" /> Processing report…
+              </>
+            ) : (
+              "Submit post-run report"
+            )}
           </button>
         </form>
+
+        {submit.isError && (
+          <div className="card-pad flex items-start gap-3 border-danger-600/40">
+            <XCircle className="w-6 h-6 text-danger-700 shrink-0" />
+            <div>
+              <p className="font-semibold text-ink-900">Could not submit the report</p>
+              <p className="text-sm text-danger-700 mt-1 font-mono break-all">
+                {String((submit.error as Error)?.message || submit.error)}
+              </p>
+              <button
+                onClick={() => submit.mutate()}
+                className="btn mt-3 text-xs"
+                disabled={submit.isPending}
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        )}
 
         {result && (
           <div className={`card-pad flex items-start gap-3 ${result.maintenance_alert ? "border-danger-600/40" : "border-ok-600/40"}`}>
@@ -112,9 +165,11 @@ export default function PostRun() {
               : <CheckCircle2 className="w-6 h-6 text-ok-700 shrink-0" />}
             <div>
               <p className="font-semibold text-ink-900">{result.message}</p>
-              {result.maintenance_alert && (
-                <p className="text-sm text-danger-700 mt-1">Critical maintenance alert triggered.</p>
-              )}
+              <p className={`text-sm mt-1 ${result.maintenance_alert ? "text-danger-700" : "text-ok-700"}`}>
+                {result.maintenance_alert
+                  ? "Critical maintenance alert triggered — a work order was opened and the instrument is booking-blocked. Check Analytics → Maintenance."
+                  : "Report logged successfully. No anomalies were flagged."}
+              </p>
             </div>
           </div>
         )}

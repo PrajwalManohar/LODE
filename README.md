@@ -21,21 +21,36 @@ HITL automation surface — all with manual citations on every agent decision.
 ## Quick start
 
 ```powershell
-# Backend (Window 1)
+# ── Backend (Window 1, project root) ─────────────────────────────────────
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 copy .env.example .env       # then fill in DATABASE_URL + SUPABASE_* keys
 uvicorn backend.main:app --port 8000
 
-# Frontend (Window 2)
+# ── Frontend (Window 2) ──────────────────────────────────────────────────
+# IMPORTANT: Vite must be started from inside `frontend/`.
+# Running `node frontend\node_modules\vite\bin\vite.js` from the project
+# root makes Vite look for index.html in the wrong directory and every
+# route 404s. Either `cd frontend` first, or use `npm run dev`.
 cd frontend
 copy .env.example .env       # set VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY
 npm install
-npm run dev
+npm run dev                  # same as: node node_modules/vite/bin/vite.js --port 5173 --host 127.0.0.1
 ```
 
-Open **http://127.0.0.1:5173** and sign in.
+Open **http://127.0.0.1:5173** and sign in. The catch-all route bounces
+unknown URLs to `/login` (when signed out) or `/` (when signed in), so you
+should never see "page not found".
+
+### One-shot launcher
+
+```powershell
+.\scripts\demo.ps1            # starts backend + frontend, opens browser
+.\scripts\demo.ps1 -Stop      # kills :8000 and :5173
+.\scripts\demo.ps1 -Reset     # clears chroma + queues + outbox + generated SOPs
+.\scripts\demo.ps1 -Smoke     # runs scripts\smoke_test_full.py headless
+```
 
 ## Features
 

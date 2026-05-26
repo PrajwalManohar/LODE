@@ -92,6 +92,12 @@ export interface EquityRow {
   pct: number;
 }
 
+export interface WorkOrderNote {
+  author: string;
+  text: string;
+  at: string;
+}
+
 export interface WorkOrder {
   id: number;
   instrument_id: string;
@@ -104,7 +110,11 @@ export interface WorkOrder {
   status: string;
   created_at: string;
   source: string;
+  assigned_team?: string | null;
+  notes?: string; // jsonb array, serialized as a JSON string by the data layer
 }
+
+export const WO_TEAMS = ["Lab Tech", "Facilities", "Vendor Service", "EH&S"] as const;
 
 export interface AutomationEvent {
   id: number;
@@ -138,6 +148,15 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
+export interface CampusFeed {
+  digest: string;
+  announcements: { title: string; body: string; tag: string; date?: string; url: string }[];
+  circulars: { title: string; body: string; tag: string; url: string }[];
+  facts: string[];
+  research_themes: { theme: string; detail: string }[];
+  source: string;
+}
+
 export interface PlatformStatus {
   version: string;
   demo_mode: boolean;
@@ -151,6 +170,7 @@ export interface PlatformStatus {
 export const api = {
   health: () => fetchJson<{ status: string }>("/health"),
   status: () => fetchJson<PlatformStatus>("/status"),
+  notifications: () => fetchJson<CampusFeed>("/notifications"),
   intake: (
     message: string,
     history: { role: string; content: string }[],
@@ -160,6 +180,11 @@ export const api = {
     fetchJson<ChatResponse>("/chat/intake", {
       method: "POST",
       body: JSON.stringify({ message, history, context, session_id }),
+    }),
+  intakeForm: (context: ExperimentContext, session_id?: string) =>
+    fetchJson<ChatResponse>("/chat/intake/form", {
+      method: "POST",
+      body: JSON.stringify({ context, session_id }),
     }),
   confirm: (
     context: ExperimentContext,
@@ -173,6 +198,12 @@ export const api = {
     }),
   instruments: () => fetchJson<Instrument[]>("/instruments"),
   bookings: () => fetchJson<Record<string, unknown>[]>("/bookings"),
+  // Only the signed-in researcher's own bookings (privacy-scoped for non-admins).
+  myBookings: (email: string) =>
+    fetchJson<Record<string, unknown>[]>(`/bookings?email=${encodeURIComponent(email)}`),
+  // Today's bookings at the labs where this user has a booking (lab-mate awareness).
+  labDay: (email: string) =>
+    fetchJson<Record<string, unknown>[]>(`/bookings/lab-day?email=${encodeURIComponent(email)}`),
   utilization: () =>
     fetchJson<{ instrument: string; week: string; hours: number; instrument_id: string }[]>(
       "/bookings/utilization"
@@ -195,6 +226,16 @@ export const api = {
     fetchJson<WorkOrder>(`/admin/work-orders/${id}/status`, {
       method: "POST",
       body: JSON.stringify({ status }),
+    }),
+  assignWorkOrder: (id: number, team: string) =>
+    fetchJson<WorkOrder>(`/admin/work-orders/${id}/assign`, {
+      method: "POST",
+      body: JSON.stringify({ team }),
+    }),
+  addWorkOrderNote: (id: number, text: string, author?: string) =>
+    fetchJson<WorkOrder>(`/admin/work-orders/${id}/note`, {
+      method: "POST",
+      body: JSON.stringify({ text, author }),
     }),
   automations: (kind?: string) =>
     fetchJson<AutomationEvent[]>(`/admin/automations${kind ? `?kind=${kind}` : ""}`),
@@ -232,4 +273,22 @@ export const api = {
     const name = path.split(/[/\\]/).pop();
     return `${API}/files/sops/${name}`;
   },
+  ragChunks: (q: { source?: string; section?: string; page?: string; instrument_id?: string }) => {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(q)) if (v) params.set(k, v);
+    return fetchJson<{ id: string; content: string; source: string; section: string; page: string; corpus_type: string; instrument_id: string }[]>(
+      `/admin/rag/chunks?${params.toString()}`,
+    );
+  },
+  myRequests: (email: string) =>
+    fetchJson<{ hitl: AutomationEvent[]; maintenance: WorkOrder[] }>(
+      `/me/requests?email=${encodeURIComponent(email)}`,
+    ),
+  requestSlots: (eventId: number) =>
+    fetchJson<{ options: BookingOption[] }>(`/me/requests/${eventId}/slots`),
+  completeHitl: (eventId: number, option?: BookingOption) =>
+    fetchJson<{ ok: boolean; booking_id?: number; sop_path?: string; message: string; event_id: number }>(
+      `/me/requests/${eventId}/complete`,
+      { method: "POST", body: JSON.stringify(option ? { option } : {}) },
+    ),
 };

@@ -26,3 +26,12 @@ def platform_status():
 @router.post("/bootstrap")
 def run_bootstrap(reindex: bool = False):
     return bootstrap(reindex=reindex)
+
+
+@router.get("/notifications")
+def notifications():
+    """Campus & facility feed (CSM news, circulars, facts, research) + an
+    AI-generated daily digest. Visible to all signed-in users."""
+    from vein.services.notifications import get_feed
+
+    return get_feed()

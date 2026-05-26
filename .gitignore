@@ -43,11 +43,13 @@ desktop.ini
 
 # ─── Logs ──────────────────────────────────────────────────────────────────
 *.log
+*.log.err
 *.err.log
 backend.log
 backend.err.log
 frontend.log
 frontend.err.log
+.vite-dev.log*
 logs/
 npm-debug.log*
 yarn-debug.log*
@@ -73,6 +75,7 @@ data/chroma/                # ChromaDB index — bootstrap rebuilds on startup
 data/airtable_queue/        # Local Airtable queue when no API key
 data/email_outbox/          # Local email outbox when no transport configured
 data/output/                # Generated SOPs (.docx) from booking confirms
+data/_*.json                # Scratch JSON payloads written by debug scripts
 data/*.sqlite*
 data/*.bak
 

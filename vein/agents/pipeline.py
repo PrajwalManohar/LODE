@@ -132,6 +132,37 @@ def score_instruments(ctx: ExperimentContext, rag_chunks: list[dict]) -> list[In
         "icp-ms": _score_icp(ctx, goal, rag_chunks),
         "rock-mech": _score_rock(ctx, goal),
         "tube-furnace": (10, "N/A", "High-temp treatment only; not for surface morphology."),
+        # --- Additional SIF instruments (keyword-matched) ---
+        "tem-talos": _score_kw(goal, ("tem", "nanostructure", "lattice", "dislocation",
+            "nanoparticle", "crystallographic", "atomic resolution", "precipitate"), 90, "A",
+            "200 kV (S)TEM with EDS — atomic-scale imaging, diffraction, and nano-EDS mapping."),
+        "fib-helios": _score_kw(goal, ("fib", "lamella", "cross-section", "site-specific",
+            "tem sample", "milling"), 88, "A",
+            "Dual-beam FIB-SEM for site-specific cross-sections and TEM lamella prep."),
+        "xrd-empyrean": _score_kw(goal, ("thin film", "texture", "residual stress",
+            "reflectivity", "phase", "crystalline"), 82, "A-",
+            "Empyrean XRD adds thin-film, texture and residual-stress configurations."),
+        "raman-witec": _score_kw(goal, ("raman", "vibrational", "molecular", "bonding",
+            "graphene", "carbon", "stress mapping"), 86, "A",
+            "Confocal Raman for vibrational/molecular fingerprinting and stress mapping."),
+        "afm-asylum": _score_kw(goal, ("afm", "topography", "roughness", "nanomechanical",
+            "modulus", "surface topography"), 85, "A",
+            "AFM for nanoscale topography, roughness and nanomechanical mapping."),
+        "xps-kratos": _score_kw(goal, ("xps", "surface chemistry", "oxidation state",
+            "binding energy", "chemical state", "passivation", "valence"), 88, "A",
+            "XPS quantifies surface chemistry and oxidation/chemical state (top ~10 nm)."),
+        "xct-versa": _score_kw(goal, ("ct", "tomography", "3d imaging", "porosity",
+            "internal structure", "void", "non-destructive"), 87, "A",
+            "Micro-CT for non-destructive 3D internal structure, porosity and voids."),
+        "apt-leap": _score_kw(goal, ("atom probe", "apt", "3d composition", "solute",
+            "segregation", "grain boundary composition", "clustering"), 89, "A",
+            "Atom probe tomography for 3D, near-atomic compositional mapping."),
+        "ms-orbitrap": _score_kw(goal, ("mass spec", "lc-ms", "molecular weight",
+            "metabolite", "organic", "proteomic", "small molecule"), 84, "A",
+            "High-res Orbitrap LC-MS for accurate-mass organic/biomolecule analysis."),
+        "gleeble-3500": _score_kw(goal, ("gleeble", "thermomechanical", "hot deformation",
+            "weld simulation", "transformation kinetics", "haz", "hot ductility"), 85, "A",
+            "Gleeble physical simulation of thermomechanical and weld-HAZ processing."),
     }
 
     for inst in instruments:
@@ -157,6 +188,21 @@ def score_instruments(ctx: ExperimentContext, rag_chunks: list[dict]) -> list[In
 
     recs.sort(key=lambda r: r.fit_score, reverse=True)
     return recs
+
+
+def _score_kw(
+    goal: str,
+    keywords: tuple[str, ...],
+    hit_score: int,
+    hit_grade: str,
+    hit_rationale: str,
+) -> tuple[int, str, str]:
+    """Generic keyword scorer for the additional SIF instruments. Returns the
+    instrument's strong score when the analysis goal mentions a matching
+    technique/keyword, otherwise a low 'not primary for this goal' score."""
+    if any(k in goal for k in keywords):
+        return hit_score, hit_grade, hit_rationale
+    return 22, "D", "Available, but not the primary technique for this analysis goal."
 
 
 def _score_sem(ctx: ExperimentContext, goal: str, chunks: list[dict]) -> tuple[int, str, str]:
@@ -261,7 +307,7 @@ def confirm_booking(
     Automation 2: SendGrid/SMTP email with .docx attachment (or local outbox).
     Automation 3: Maintenance work order if instrument is overdue for calibration.
     """
-    sop_path = generate_sop_document(ctx, top, option)
+    # Create the booking first so the SOP header can show its real code.
     bid = create_booking(
         option.instrument_id,
         ctx.researcher_name or "Researcher",
@@ -269,8 +315,18 @@ def confirm_booking(
         option.start_time,
         option.end_time,
         ctx.model_dump(),
-        str(sop_path),
+        "",
     )
+    booking_code = f"VEIN-{bid:04d}"
+    sop_path = generate_sop_document(ctx, top, option, booking_code=booking_code)
+    # Persist the rendered SOP path now that we have it.
+    try:
+        from vein.db.database import get_conn
+        with get_conn() as conn:
+            conn.execute("UPDATE bookings SET sop_path = %s WHERE id = %s",
+                         (str(sop_path), bid))
+    except Exception:  # noqa: BLE001 — non-critical bookkeeping
+        pass
 
     # Automation 1 — Airtable booking record
     airtable_record = push_booking_record(
@@ -291,7 +347,6 @@ def confirm_booking(
     # Automation 2 — Email 1: booking confirmation + SOP (+ cited checklist + .ics)
     inst_meta = get_instrument(top.instrument_id) or {}
     location = inst_meta.get("location", "")
-    booking_code = f"VEIN-{bid:04d}"
     tz_label = local_tz_label()
     when_str = f"{option.start_time:%A, %b %d, %Y · %I:%M %p}–{option.end_time:%I:%M %p} {tz_label}"
     sop_chunks = query_corpus(
@@ -323,6 +378,11 @@ def confirm_booking(
         f"LOCATION:{location}\r\nDESCRIPTION:{ctx.analysis_goal or ctx.material_type}\r\n"
         "END:VEVENT\r\nEND:VCALENDAR"
     )
+    # Surface the same RAG references that the SOP cites, so the email and the
+    # attached .docx tell the same story.
+    from vein.services.sop_builder import _references_from_chunks  # noqa: WPS437
+    references = _references_from_chunks(sop_chunks)
+
     email_result = send_sop_email(
         ctx, str(sop_path),
         booking_code=booking_code,
@@ -334,6 +394,8 @@ def confirm_booking(
         approved_by="Auto-approved · LODE safety gate",
         checklist=checklist,
         ics_text=ics_text,
+        fit_rationale=top.rationale,
+        references=references,
     )
 
     # Automation 3 — preemptive work order if calibration is overdue
@@ -429,7 +491,20 @@ def process_post_run(report: PostRunReport, session_id: Optional[str] = None) ->
             source="post_run",
         )
 
-    index_corpus(force=True)
+    # Re-index so a future booking inherits the new run/maintenance context.
+    # A synchronous force-reindex re-embeds the whole corpus and can take 20s+,
+    # which made the post-run submission appear to hang (and, under load, time
+    # out). Run it in a background thread so the response returns immediately;
+    # it's non-critical to the submission itself.
+    def _bg_reindex() -> None:
+        try:
+            index_corpus(force=True)
+        except Exception as exc:  # noqa: BLE001
+            import logging
+            logging.getLogger("vein.pipeline").warning("post-run re-index failed: %s", exc)
+
+    import threading
+    threading.Thread(target=_bg_reindex, daemon=True, name="postrun-reindex").start()
 
     if session_id:
         log_agent_decision(
@@ -453,6 +528,6 @@ def process_post_run(report: PostRunReport, session_id: Optional[str] = None) ->
         "run_log_id": rid,
         "maintenance_alert": maintenance_alert,
         "work_order": work_order,
-        "message": "Post-run report processed. Knowledge base re-indexed."
+        "message": "Post-run report processed; knowledge base updating in the background."
         + (f" Work order #{work_order['id']} opened." if work_order else ""),
     }

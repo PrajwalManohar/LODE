@@ -4,18 +4,20 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
   CheckCircle2,
-  Download,
+  ChevronDown,
   Filter,
   Mail,
+  MessageSquarePlus,
   Search,
   ShieldAlert,
   Sparkles,
+  Users,
   X,
   XCircle,
 } from "lucide-react";
 import clsx from "clsx";
 import { PageBody, PageHeader } from "../components/PageShell";
-import { api, AutomationEvent, EquityRow, WorkOrder } from "../lib/api";
+import { api, AutomationEvent, EquityRow, WorkOrder, WorkOrderNote, WO_TEAMS } from "../lib/api";
 import { useAuth } from "../lib/auth";
 
 type Toast = { kind: "ok" | "err"; text: string } | null;
@@ -41,6 +43,20 @@ export default function Governance() {
   const statusMutation = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) => api.setWorkOrderStatus(id, status),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["work-orders"] }),
+  });
+  const assignMutation = useMutation({
+    mutationFn: ({ id, team }: { id: number; team: string }) => api.assignWorkOrder(id, team),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["work-orders"] });
+      qc.invalidateQueries({ queryKey: ["automations"] });
+      setToast({ kind: "ok", text: "Work order assigned." });
+    },
+    onError: (e: Error) => setToast({ kind: "err", text: e.message || "Assign failed." }),
+  });
+  const noteMutation = useMutation({
+    mutationFn: ({ id, text }: { id: number; text: string }) => api.addWorkOrderNote(id, text),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["work-orders"] }),
+    onError: (e: Error) => setToast({ kind: "err", text: e.message || "Could not add note." }),
   });
 
   const approveMutation = useMutation({
@@ -124,9 +140,6 @@ export default function Governance() {
               title="Send the green monthly-utilization email now"
             >
               <Mail className="w-4 h-4" /> Send monthly report
-            </button>
-            <button className="btn">
-              <Download className="w-4 h-4" /> Export PDF
             </button>
           </>
         }
@@ -231,7 +244,11 @@ export default function Governance() {
           instruments={instruments}
           isAdmin={isAdmin}
           pending={statusMutation.isPending}
+          assigning={assignMutation.isPending}
+          noting={noteMutation.isPending}
           onStatus={(id, status) => statusMutation.mutate({ id, status })}
+          onAssign={(id, team) => assignMutation.mutate({ id, team })}
+          onNote={(id, text) => noteMutation.mutate({ id, text })}
         />
 
         <div className="grid lg:grid-cols-3 gap-6">
@@ -364,6 +381,7 @@ function HitlRow({
   onDeny: () => void;
   pending: boolean;
 }) {
+  const [open, setOpen] = useState(false);
   const payload = parsePayload(r.payload);
   const reasons: string[] = Array.isArray(payload.reasons)
     ? (payload.reasons as string[]).filter((x) => typeof x === "string")
@@ -379,36 +397,55 @@ function HitlRow({
     const v = payload[k];
     return typeof v === "string" && v ? v : fallback;
   };
+  const n = (k: string): string => {
+    const v = payload[k];
+    return typeof v === "number" ? String(v) : typeof v === "string" && v ? v : "—";
+  };
+  const ctx = (payload.context && typeof payload.context === "object"
+    ? payload.context : {}) as Record<string, unknown>;
+  const cs = (k: string): string => {
+    const v = ctx[k];
+    return typeof v === "string" && v ? v : "—";
+  };
   return (
     <li className="px-5 py-4">
       <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <p className="text-sm font-semibold text-ink-900 tracking-tight">
-              {s("booking_code", `HITL-${r.id}`)}
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="min-w-0 flex-1 text-left flex items-start gap-2"
+        >
+          <ChevronDown
+            className={clsx("w-4 h-4 text-ink-400 mt-0.5 shrink-0 transition-transform", open && "rotate-180")}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="text-sm font-semibold text-ink-900 tracking-tight">
+                {s("booking_code", `HITL-${r.id}`)}
+              </p>
+              <span className={statusPill}>{r.status}</span>
+              <span className="pill-muted">{s("alert_title", r.detail || "—")}</span>
+            </div>
+            <p className="text-xs text-ink-500 mt-1 leading-snug">
+              <span className="text-ink-700 font-medium">{s("researcher_name")}</span>{" "}
+              ({s("researcher_email")}) ·{" "}
+              <span className="text-ink-700">{s("instrument_name")}</span> · {s("when", "Not scheduled")}
             </p>
-            <span className={statusPill}>{r.status}</span>
-            <span className="pill-muted">{s("alert_title", r.detail || "—")}</span>
+            <p className="text-xs text-ink-500 mt-0.5">
+              Experiment: <span className="text-ink-700">{s("experiment")}</span>
+            </p>
+            {reasons.length > 0 && (
+              <ul className="mt-2 ml-1 space-y-0.5">
+                {reasons.map((reason: string, i: number) => (
+                  <li key={i} className="text-xs text-ink-600 flex items-start gap-1.5">
+                    <span className="text-warn-700 mt-0.5">•</span>
+                    <span>{reason}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
-          <p className="text-xs text-ink-500 mt-1 leading-snug">
-            <span className="text-ink-700 font-medium">{s("researcher_name")}</span>{" "}
-            ({s("researcher_email")}) ·{" "}
-            <span className="text-ink-700">{s("instrument_name")}</span> · {s("when", "Not scheduled")}
-          </p>
-          <p className="text-xs text-ink-500 mt-0.5">
-            Experiment: <span className="text-ink-700">{s("experiment")}</span>
-          </p>
-          {reasons.length > 0 && (
-            <ul className="mt-2 ml-1 space-y-0.5">
-              {reasons.map((reason: string, i: number) => (
-                <li key={i} className="text-xs text-ink-600 flex items-start gap-1.5">
-                  <span className="text-warn-700 mt-0.5">•</span>
-                  <span>{reason}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        </button>
         {isPending && (
           <div className="flex items-center gap-1.5 shrink-0">
             <button
@@ -428,7 +465,31 @@ function HitlRow({
           </div>
         )}
       </div>
+
+      {/* Drill-down: the full request the operator is signing off on */}
+      {open && (
+        <div className="mt-3 ml-6 grid sm:grid-cols-3 gap-3">
+          <Detail label="Fit score" value={`${n("fit_score")} / 100`} />
+          <Detail label="Grade" value={s("grade")} />
+          <Detail label="Confidence" value={`${n("confidence")}%`} />
+          <Detail label="Research group" value={s("research_group")} />
+          <Detail label="Training status" value={s("training_status")} />
+          <Detail label="Session" value={s("session_id", r.target || "—")} />
+          <Detail label="Material" value={cs("material_type")} />
+          <Detail label="Analysis goal" value={cs("analysis_goal")} />
+          <Detail label="Deadline" value={cs("deadline")} />
+        </div>
+      )}
     </li>
+  );
+}
+
+function Detail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-ink-200 bg-white px-3 py-2">
+      <p className="text-[10px] font-semibold tracking-wider text-ink-500 uppercase">{label}</p>
+      <p className="text-xs text-ink-900 mt-0.5 break-words">{value}</p>
+    </div>
   );
 }
 
@@ -440,13 +501,21 @@ function MaintenanceSection({
   instruments,
   isAdmin,
   pending,
+  assigning,
+  noting,
   onStatus,
+  onAssign,
+  onNote,
 }: {
   workOrders: WorkOrder[];
   instruments: { id: string; name: string }[];
   isAdmin: boolean;
   pending: boolean;
+  assigning: boolean;
+  noting: boolean;
   onStatus: (id: number, status: string) => void;
+  onAssign: (id: number, team: string) => void;
+  onNote: (id: number, text: string) => void;
 }) {
   const [severity, setSeverity] = useState<"all" | "critical" | "warning">("all");
   const [status, setStatus]     = useState<"all" | "open" | "in_progress" | "closed">("open");
@@ -548,7 +617,11 @@ function MaintenanceSection({
               w={w}
               isAdmin={isAdmin}
               pending={pending}
+              assigning={assigning}
+              noting={noting}
               onStatus={(s) => onStatus(w.id, s)}
+              onAssign={(team) => onAssign(w.id, team)}
+              onNote={(text) => onNote(w.id, text)}
             />
           ))}
         </ul>
@@ -593,24 +666,54 @@ function FilterSelect({
   );
 }
 
+function parseNotes(raw?: string): WorkOrderNote[] {
+  if (!raw) return [];
+  try {
+    const arr = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return Array.isArray(arr) ? (arr as WorkOrderNote[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 function WorkOrderRow({
   w,
   isAdmin,
   pending,
+  assigning,
+  noting,
   onStatus,
+  onAssign,
+  onNote,
 }: {
   w: WorkOrder;
   isAdmin: boolean;
   pending: boolean;
+  assigning: boolean;
+  noting: boolean;
   onStatus: (status: string) => void;
+  onAssign: (team: string) => void;
+  onNote: (text: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const [noteText, setNoteText] = useState("");
   const usagePct =
     w.calibration_interval_hours > 0
       ? Math.round((w.usage_hours / w.calibration_interval_hours) * 100)
       : 0;
+  const notes = parseNotes(w.notes);
+
   return (
-    <li className={clsx("px-5 py-4", w.status === "closed" && "opacity-60")}>
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+    <li className={clsx(w.status === "closed" && "opacity-60")}>
+      {/* Clickable summary row — toggles the drill-down */}
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full text-left px-5 py-4 hover:bg-ink-50/60 transition flex items-start gap-3"
+      >
+        <ChevronDown
+          className={clsx("w-4 h-4 text-ink-400 mt-0.5 shrink-0 transition-transform", open && "rotate-180")}
+        />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <p className="text-sm font-semibold text-ink-900 tracking-tight">
@@ -620,22 +723,42 @@ function WorkOrderRow({
             <p className="text-sm text-ink-900 truncate">{w.instrument_name ?? w.instrument_id}</p>
             <SeverityPill severity={w.severity} />
             <StatusPill status={w.status} />
-            <span className="pill-muted text-[10px]">{w.source}</span>
+            {w.assigned_team ? (
+              <span className="pill-info inline-flex items-center gap-1">
+                <Users className="w-3 h-3" /> {w.assigned_team}
+              </span>
+            ) : (
+              <span className="pill-muted text-[10px]">unassigned</span>
+            )}
+            {notes.length > 0 && (
+              <span className="pill-muted text-[10px] inline-flex items-center gap-1">
+                <MessageSquarePlus className="w-3 h-3" /> {notes.length}
+              </span>
+            )}
           </div>
-          <p className="text-sm text-ink-700 mt-1.5 leading-snug">{w.issue}</p>
+          <p className="text-sm text-ink-700 mt-1.5 leading-snug line-clamp-1">{w.issue}</p>
+        </div>
+        <span className="text-[11px] text-ink-400 shrink-0 mt-0.5 hidden sm:block">
+          {new Date(w.created_at).toLocaleDateString()}
+        </span>
+      </button>
+
+      {/* Drill-down panel */}
+      {open && (
+        <div className="px-5 pb-5 pl-12 space-y-4">
           {w.recommended_action && (
-            <p className="text-xs text-ink-500 mt-1.5 leading-snug">
+            <p className="text-xs text-ink-600 leading-snug">
               <span className="font-semibold text-ink-600 uppercase tracking-wider text-[10px]">
                 Recommendation:
               </span>{" "}
               {w.recommended_action}
             </p>
           )}
-          <div className="flex items-center gap-3 mt-2 flex-wrap">
+          <div className="flex items-center gap-3 flex-wrap">
             <span className="text-[11px] font-mono text-ink-500 tabular-nums">
-              {w.usage_hours.toFixed(0)}h / {w.calibration_interval_hours}h cal
+              {w.usage_hours.toFixed(0)}h / {w.calibration_interval_hours}h cal · {usagePct}%
             </span>
-            <div className="w-32 h-1 rounded-full bg-ink-100 overflow-hidden">
+            <div className="w-40 h-1.5 rounded-full bg-ink-100 overflow-hidden">
               <div
                 className={clsx(
                   "h-full rounded-full",
@@ -644,32 +767,102 @@ function WorkOrderRow({
                 style={{ width: `${Math.min(100, usagePct)}%` }}
               />
             </div>
-            <span className="text-[11px] text-ink-400">
-              {new Date(w.created_at).toLocaleString()}
-            </span>
+            <span className="pill-muted text-[10px]">source: {w.source}</span>
+            <span className="text-[11px] text-ink-400">{new Date(w.created_at).toLocaleString()}</span>
           </div>
+
+          {isAdmin && (
+            <>
+              {/* Actions: assign + status */}
+              <div className="flex items-end gap-3 flex-wrap">
+                <label className="block">
+                  <span className="block text-[10px] font-bold tracking-wider text-ink-500 uppercase mb-1">
+                    Assign to team
+                  </span>
+                  <select
+                    value={w.assigned_team ?? ""}
+                    onChange={(e) => e.target.value && onAssign(e.target.value)}
+                    disabled={assigning || w.status === "closed"}
+                    className="appearance-none bg-white border border-ink-200 rounded-md px-3 py-1.5 text-xs text-ink-900 focus:outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/20 transition disabled:opacity-50"
+                  >
+                    <option value="">— select team —</option>
+                    {WO_TEAMS.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </label>
+                {w.status !== "closed" && (
+                  <div className="flex items-center gap-1.5">
+                    {w.status === "open" && (
+                      <button
+                        onClick={() => onStatus("in_progress")}
+                        disabled={pending}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[11px] font-semibold bg-info-50 text-info-700 border border-info-200 hover:bg-info-100 transition disabled:opacity-50"
+                      >
+                        <Sparkles className="w-3 h-3" /> Start
+                      </button>
+                    )}
+                    <button
+                      onClick={() => onStatus("closed")}
+                      disabled={pending}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[11px] font-semibold bg-ok-50 text-ok-700 border border-ok-200 hover:bg-ok-100 transition disabled:opacity-50"
+                    >
+                      <Check className="w-3 h-3" /> Resolve & close
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Review comments */}
+              <div>
+                <p className="text-[10px] font-bold tracking-wider text-ink-500 uppercase mb-2">
+                  Review comments
+                </p>
+                {notes.length > 0 ? (
+                  <ul className="space-y-2 mb-2">
+                    {notes.map((n, i) => (
+                      <li key={i} className="rounded-lg border border-ink-200 bg-ink-50 px-3 py-2">
+                        <p className="text-xs text-ink-800 leading-snug">{n.text}</p>
+                        <p className="text-[10px] text-ink-400 mt-1">
+                          {n.author} · {n.at ? new Date(n.at).toLocaleString() : ""}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-xs text-ink-400 mb-2">No comments yet.</p>
+                )}
+                <div className="flex items-center gap-2">
+                  <input
+                    value={noteText}
+                    onChange={(e) => setNoteText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && noteText.trim()) {
+                        onNote(noteText.trim());
+                        setNoteText("");
+                      }
+                    }}
+                    placeholder="Add a review comment…"
+                    className="flex-1 bg-white border border-ink-200 rounded-md px-3 py-1.5 text-xs focus:outline-none focus:border-navy-500 focus:ring-2 focus:ring-navy-500/20 transition"
+                  />
+                  <button
+                    onClick={() => {
+                      if (noteText.trim()) {
+                        onNote(noteText.trim());
+                        setNoteText("");
+                      }
+                    }}
+                    disabled={noting || !noteText.trim()}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[11px] font-semibold bg-navy-800 text-white hover:bg-navy-900 transition disabled:opacity-50"
+                  >
+                    <MessageSquarePlus className="w-3 h-3" /> Add
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
-        {isAdmin && w.status !== "closed" && (
-          <div className="flex items-center gap-1.5 shrink-0">
-            {w.status === "open" && (
-              <button
-                onClick={() => onStatus("in_progress")}
-                disabled={pending}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-info-50 text-info-700 border border-info-200 hover:bg-info-100 transition disabled:opacity-50"
-              >
-                <Sparkles className="w-3 h-3" /> Start
-              </button>
-            )}
-            <button
-              onClick={() => onStatus("closed")}
-              disabled={pending}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-ok-50 text-ok-700 border border-ok-200 hover:bg-ok-100 transition disabled:opacity-50"
-            >
-              <Check className="w-3 h-3" /> Close
-            </button>
-          </div>
-        )}
-      </div>
+      )}
     </li>
   );
 }

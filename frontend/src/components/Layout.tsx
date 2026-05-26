@@ -1,5 +1,6 @@
 import { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import {
   LayoutGrid,
   MessageSquare,
@@ -9,8 +10,10 @@ import {
   BookOpen,
   BarChart3,
   Settings,
+  ClipboardCheck,
 } from "lucide-react";
 import clsx from "clsx";
+import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useRealtime } from "../lib/useRealtime";
 
@@ -21,16 +24,17 @@ const sections: Section[] = [
   {
     title: "Main",
     items: [
-      { to: "/",         label: "Dashboard",     icon: LayoutGrid },
+      { to: "/",         label: "Dashboard",      icon: LayoutGrid },
       { to: "/intake",   label: "Book a session", icon: MessageSquare },
-      { to: "/bookings", label: "Schedule",      icon: CalendarDays },
+      { to: "/requests", label: "My Requests",    icon: ClipboardCheck },
+      { to: "/bookings", label: "Schedule",       icon: CalendarDays },
     ],
   },
   {
     title: "Research",
     items: [
-      { to: "/instruments", label: "Instruments",    icon: FlaskConical },
-      { to: "/postrun",     label: "My SOPs",        icon: FileText },
+      { to: "/instruments", label: "Instruments",       icon: FlaskConical },
+      { to: "/postrun",     label: "Post-run report",   icon: FileText },
     ],
   },
   {
@@ -54,6 +58,16 @@ export default function Layout({ children }: { children: ReactNode }) {
   const { isAdmin } = useAuth();
   const live = useRealtime();
   const visibleSections = sections.filter((s) => !s.adminOnly || isAdmin);
+
+  // Admin-only pending-HITL badge. Re-fetches in real time because useRealtime
+  // invalidates ["hitl"] whenever automation_events changes.
+  const { data: pendingHitl = [] } = useQuery({
+    queryKey: ["hitl"],
+    queryFn: () => api.hitlList("pending"),
+    enabled: isAdmin,
+    refetchInterval: 20000,
+  });
+  const pendingCount = pendingHitl.length;
 
   return (
     <div className="flex min-h-screen bg-ink-50">
@@ -107,7 +121,15 @@ export default function Layout({ children }: { children: ReactNode }) {
                             <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r bg-gold-500" />
                           )}
                           <Icon className="w-[18px] h-[18px] shrink-0" />
-                          <span>{label}</span>
+                          <span className="flex-1">{label}</span>
+                          {to === "/governance" && pendingCount > 0 && (
+                            <span
+                              className="ml-auto inline-flex items-center justify-center min-w-[20px] h-[20px] px-1.5 rounded-full bg-warn-600 text-white text-[10px] font-bold tabular-nums"
+                              title={`${pendingCount} HITL request(s) awaiting your approval`}
+                            >
+                              {pendingCount}
+                            </span>
+                          )}
                         </>
                       )}
                     </NavLink>
