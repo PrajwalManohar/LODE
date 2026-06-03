@@ -37,6 +37,7 @@ from vein.db.database import (
     update_automation_event_status,
 )
 from vein.services.email import send_hitl_email, send_user_hitl_pending_email
+from vein.services.privacy import audit, redact, redact_ctx_for_llm
 from vein.models.experiment import (
     BookingOption,
     ChatResponse,
@@ -72,13 +73,32 @@ def _ensure_session(state: LodeGraphState) -> str:
     return sid
 
 
+def _restore_identity(ctx: ExperimentContext, prior: "ExperimentContext | None") -> ExperimentContext:
+    """Researcher identity is authoritative from the authenticated session — never
+    from the LLM. Agent 1's prompt is fed a PII-redacted context (name/email/group
+    are masked before the call), so the model echoes masked/empty identity back.
+    Restore the real values from the inbound context so bookings, confirmation /
+    HITL emails, and the My-Requests lookup (which matches on researcher_email)
+    all resolve to the right person."""
+    if prior is None:
+        return ctx
+    ctx.researcher_name = prior.researcher_name or ctx.researcher_name
+    ctx.researcher_email = prior.researcher_email or ctx.researcher_email
+    ctx.research_group = prior.research_group or ctx.research_group
+    if prior.trained_instruments:
+        ctx.trained_instruments = prior.trained_instruments
+    return ctx
+
+
 def _agent1_context(state: LodeGraphState) -> LodeGraphState:
     sid = _ensure_session(state)
     ctx = state.get("context") or ExperimentContext()
     message = state["message"]
     history = state.get("history", [])
-    query = f"{message} {ctx.analysis_goal} {ctx.material_type}"
-    rag_chunks = query_corpus(query, n_results=5)
+    # RAG queries hit an external vector index; redact PII before it leaves
+    # our process. GDPR Art. 5 (data minimisation) / Art. 32 (security).
+    safe_query = redact(f"{message} {ctx.analysis_goal} {ctx.material_type}")
+    rag_chunks = query_corpus(safe_query, n_results=5)
     citations = [Citation(**c) for c in format_citations(rag_chunks)]
 
     parsed_via = "demo"
@@ -96,12 +116,28 @@ def _agent1_context(state: LodeGraphState) -> LodeGraphState:
             "and surface them. Ask one clarifying question if a critical field is missing."
         )
         rag_ctx = "\n".join(f"[{c.source}]: {c.excerpt}" for c in citations)
-        user = f"History: {history[-6:]}\nMessage: {message}\nContext so far: {ctx.model_dump()}\nRAG:\n{rag_ctx}"
+        # Strip researcher PII (name/email/group) from the structured context
+        # before it goes to the LLM provider. The pipeline still uses the real
+        # ctx for booking + emails — only the prompt is masked. Free-text
+        # message also gets a PII scrub.
+        safe_ctx_dict = redact_ctx_for_llm(ctx.model_dump())
+        safe_message = redact(message)
+        safe_history = [
+            {"role": h.get("role"), "content": redact(h.get("content", ""))}
+            for h in history[-6:]
+        ]
+        user = (
+            f"History: {safe_history}\nMessage: {safe_message}\n"
+            f"Context so far: {safe_ctx_dict}\nRAG:\n{rag_ctx}"
+        )
         try:
             parsed = invoke_structured(system, user, ParsedContext)
             ctx = ExperimentContext(
                 **{k: v for k, v in parsed.model_dump().items() if k in ExperimentContext.model_fields}
             )
+            # The LLM only ever saw a PII-redacted context, so restore the real
+            # researcher identity from the inbound (authenticated) context.
+            ctx = _restore_identity(ctx, state.get("context"))
             ctx = annotate_hazmat(ctx, message)
             complete = not parsed.needs_clarification and bool(ctx.analysis_goal and ctx.material_type)
             log_agent_decision(
@@ -138,6 +174,7 @@ def _agent1_context(state: LodeGraphState) -> LodeGraphState:
 
     resp = _demo_intake(message, ctx, rag_chunks, citations, history)
     ctx = annotate_hazmat(resp.context or ctx, message)
+    ctx = _restore_identity(ctx, state.get("context"))
     log_agent_decision(
         sid, "agent1_context",
         input_summary=message,
@@ -162,6 +199,14 @@ def _agent1_context(state: LodeGraphState) -> LodeGraphState:
 
 
 def _route_after_context(state: LodeGraphState) -> Literal["clarify", "escalate", "fit", "schedule"]:
+    # Hazmat is a hard-trigger escalation. If Agent 1 detected hazardous
+    # material keywords (or the researcher declared one), we MUST run the
+    # safety gate so the HITL email fires — even if the conversation would
+    # otherwise still be asking clarifying questions. Without this, a user
+    # mentioning HF in chat sees the red banner but no email is sent.
+    ctx = state.get("context")
+    if ctx is not None and (ctx.hazmat_review_required or ctx.hazardous_materials):
+        return "fit"
     if state.get("needs_clarification"):
         return "clarify"
     if state.get("escalated"):
@@ -272,9 +317,14 @@ def _safety_gate(state: LodeGraphState) -> LodeGraphState:
     )
 
     # Auto-fire HITL email + persist pending-request row when the gate refuses.
-    # This is the only place in the intake flow that knows enough to write the
-    # researcher's name, the picked instrument, and the proposed slot.
-    if not result.passed and top is not None:
+    # We fire even when `top is None` IF the refusal is hazmat-driven — that's
+    # the chat-mode case where the user mentioned a hazardous material before
+    # the context was complete enough to score an instrument. The supervisor
+    # still needs to know.
+    hazmat_only = top is None and bool(
+        ctx.hazmat_review_required or ctx.hazardous_materials
+    )
+    if not result.passed and (top is not None or hazmat_only):
         try:
             booking_code = f"HITL-{sid.replace('sess_', '').upper()[:6]}"
             slot = options[0] if options else None
@@ -307,13 +357,20 @@ def _safety_gate(state: LodeGraphState) -> LodeGraphState:
 
             # Persist a pending HITL request with the *full* booking state so
             # an approval can later auto-complete the booking (run_confirm_graph)
-            # without making the user re-enter the form. The payload carries:
-            #   - the structured ExperimentContext
-            #   - the picked InstrumentFit (top)
-            #   - the preferred BookingOption (first slot proposed)
+            # without making the user re-enter the form. In hazmat-only mode
+            # (no recommendation yet), we store None for recommendation/option
+            # — /requests/{id}/complete will refuse to replay until the
+            # researcher provides them via the form.
             slot_payload = None
             if slot is not None:
                 slot_payload = slot.model_dump(mode="json")
+            inst_id = top.instrument_id if top else "(pending)"
+            inst_name = top.instrument_name if top else "Instrument TBD — hazmat triage"
+            fit_score = top.fit_score if top else 0
+            grade = top.grade if top else "—"
+            confidence_val = (
+                (getattr(top, "confidence", None) or top.fit_score) if top else 0
+            )
             event_id = record_automation_event(
                 kind="hitl_request",
                 status="pending",
@@ -325,19 +382,19 @@ def _safety_gate(state: LodeGraphState) -> LodeGraphState:
                     "researcher_name": ctx.researcher_name,
                     "researcher_email": ctx.researcher_email,
                     "research_group": ctx.research_group,
-                    "instrument_id": top.instrument_id,
-                    "instrument_name": top.instrument_name,
+                    "instrument_id": inst_id,
+                    "instrument_name": inst_name,
                     "experiment": ctx.analysis_goal or ctx.material_type,
-                    "fit_score": top.fit_score,
-                    "grade": top.grade,
-                    "confidence": getattr(top, "confidence", None) or top.fit_score,
+                    "fit_score": fit_score,
+                    "grade": grade,
+                    "confidence": confidence_val,
                     "when": when_str,
                     "alert_title": alert_title,
                     "alert_text": lead,
                     "reasons": result.reasons,
                     # The next three are what /requests/{id}/complete replays.
                     "context": ctx.model_dump(mode="json"),
-                    "recommendation": top.model_dump(mode="json"),
+                    "recommendation": top.model_dump(mode="json") if top else None,
                     "option": slot_payload,
                 },
             )
@@ -345,18 +402,34 @@ def _safety_gate(state: LodeGraphState) -> LodeGraphState:
             send_hitl_email(
                 booking_code=booking_code,
                 researcher=f"{ctx.researcher_name or 'Researcher'} ({ctx.researcher_email or '—'})",
-                instrument=top.instrument_name,
+                instrument=inst_name,
                 location="—",
                 when=when_str,
                 experiment=ctx.analysis_goal or ctx.material_type or "—",
-                fit_score=top.fit_score,
-                grade=top.grade,
-                confidence=getattr(top, "confidence", None) or top.fit_score,
+                fit_score=fit_score,
+                grade=grade,
+                confidence=confidence_val,
                 training_status=training_status,
                 alert_title=alert_title,
                 alert_text=lead or "; ".join(result.reasons),
                 reasoning=result.reasons,
                 event_id=event_id,
+            )
+            # FERPA §99.32 / HIPAA §164.312(b) — the privacy audit log gets a
+            # row in addition to agent_decisions, so a single grep finds every
+            # data-touch the platform made for this user.
+            audit(
+                "safety_gate.escalate",
+                actor=ctx.researcher_email or None,
+                subject=ctx.researcher_email or None,
+                detail={
+                    "booking_code": booking_code,
+                    "event_id": event_id,
+                    "session_id": sid,
+                    "instrument": inst_name,
+                    "reasons": result.reasons,
+                    "hazmat_only": hazmat_only,
+                },
             )
             # Tell the researcher their booking is awaiting review so they don't
             # think the submission was lost. This is the user-side counterpart
@@ -366,7 +439,7 @@ def _safety_gate(state: LodeGraphState) -> LodeGraphState:
                     researcher_email=ctx.researcher_email or "",
                     researcher_name=ctx.researcher_name or "",
                     booking_code=booking_code,
-                    instrument=top.instrument_name,
+                    instrument=inst_name,
                     when=when_str,
                     experiment=ctx.analysis_goal or ctx.material_type or "—",
                     reasons=result.reasons,
@@ -375,7 +448,7 @@ def _safety_gate(state: LodeGraphState) -> LodeGraphState:
             except Exception as exc:  # noqa: BLE001
                 log_agent_decision(
                     sid, "safety_gate",
-                    input_summary=f"top={top.instrument_id}",
+                    input_summary=f"top={top.instrument_id if top else '(pending)'}",
                     output_summary=f"user-pending email failed: {exc}",
                     reasoning="Email transport raised — supervisor still notified.",
                     confidence=0, rag_chunks=[], citations=[], outcome="escalate",
@@ -387,7 +460,7 @@ def _safety_gate(state: LodeGraphState) -> LodeGraphState:
             # Telemetry only — refusal is still reported in the UI banner.
             log_agent_decision(
                 sid, "safety_gate",
-                input_summary=f"top={top.instrument_id}",
+                input_summary=f"top={top.instrument_id if top else '(pending)'}",
                 output_summary=f"HITL dispatch failed: {exc}",
                 reasoning="Email transport raised — see backend logs.",
                 confidence=0, rag_chunks=[], citations=[], outcome="escalate",

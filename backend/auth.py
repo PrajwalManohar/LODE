@@ -32,6 +32,28 @@ except ImportError:  # pragma: no cover - dependency added in requirements.txt
 
 _bearer = HTTPBearer(auto_error=False)
 
+# Cached JWKS client for asymmetric (ES256/RS256) Supabase signing keys. New
+# Supabase projects sign user tokens with rotating EC keys published at the
+# project's JWKS endpoint, not the legacy HS256 shared secret. PyJWKClient
+# fetches + caches the public keys so we verify those tokens too.
+_jwks_client = None
+
+
+def _get_jwks_client():
+    global _jwks_client
+    if _jwks_client is None:
+        if not settings.supabase_url:
+            raise HTTPException(
+                status_code=500,
+                detail="SUPABASE_URL must be set to verify asymmetric (ES256) tokens",
+            )
+        from jwt import PyJWKClient
+
+        _jwks_client = PyJWKClient(
+            f"{settings.supabase_url}/auth/v1/.well-known/jwks.json"
+        )
+    return _jwks_client
+
 
 @dataclass
 class CurrentUser:
@@ -45,16 +67,36 @@ class CurrentUser:
 
 
 def _decode(token: str) -> dict:
+    """Verify a Supabase JWT.
+
+    Supabase signs user tokens either with the legacy HS256 shared secret OR,
+    on newer projects, with rotating asymmetric ES256/RS256 keys published at
+    the project's JWKS endpoint. We pick the verification path from the token's
+    `alg` header so both work. `aud` is treated as informational (the anon key
+    and some token variants omit it) — signature + expiry are still enforced.
+    """
     if jwt is None:
         raise HTTPException(status_code=500, detail="PyJWT not installed")
     try:
+        alg = (jwt.get_unverified_header(token) or {}).get("alg", "HS256")
+        if alg == "HS256":
+            return jwt.decode(
+                token,
+                settings.supabase_jwt_secret,
+                algorithms=["HS256"],
+                options={"verify_aud": False},
+            )
+        # Asymmetric signing key — resolve the public key from JWKS by `kid`.
+        signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
         return jwt.decode(
             token,
-            settings.supabase_jwt_secret,
-            algorithms=["HS256"],
-            audience="authenticated",
+            signing_key.key,
+            algorithms=["ES256", "RS256", "EdDSA"],
+            options={"verify_aud": False},
         )
-    except Exception as exc:  # invalid / expired / wrong signature
+    except HTTPException:
+        raise
+    except Exception as exc:  # invalid / expired / wrong signature / JWKS miss
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid token: {exc}",

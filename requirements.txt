@@ -19,6 +19,8 @@ python-multipart>=0.0.9
 # Backend talks to Postgres via psycopg; auth/realtime live in the frontend
 # (supabase-js), so the heavy `supabase` python package is intentionally omitted.
 PyJWT>=2.9.0
+# Required by PyJWT to verify Supabase's asymmetric ES256 (JWKS) access tokens.
+cryptography>=42.0.0
 psycopg[binary]>=3.2.0
 psycopg-pool>=3.2.0
 pgvector>=0.3.0

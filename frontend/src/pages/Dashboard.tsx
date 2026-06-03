@@ -5,6 +5,7 @@ import {
   Plus, FileText, CalendarDays, MapPin, Megaphone, ExternalLink,
   Lightbulb, Sparkles, FlaskConical, Bell, ShieldCheck,
   ChevronDown, FileDown, GraduationCap, Activity, ListChecks,
+  Clock, CheckCircle2, CalendarPlus, Wrench, Mail, RefreshCw, Radio,
 } from "lucide-react";
 import clsx from "clsx";
 import { api } from "../lib/api";
@@ -47,6 +48,20 @@ export default function Dashboard() {
   const { data: util = [] } = useQuery({ queryKey: ["utilization"], queryFn: api.utilization, enabled: isAdmin });
   const { data: runs = [] } = useQuery({ queryKey: ["runs"], queryFn: api.runs, enabled: isAdmin });
 
+  // Live feeds — poll on an interval so the activity stream feels real-time.
+  const { data: myReq } = useQuery({
+    queryKey: ["my-requests", userEmail],
+    queryFn: () => api.myRequests(userEmail),
+    enabled: !isAdmin && !!userEmail,
+    refetchInterval: 20000,
+  });
+  const { data: autos = [] } = useQuery({
+    queryKey: ["automations-feed"],
+    queryFn: () => api.automations(),
+    enabled: isAdmin,
+    refetchInterval: 20000,
+  });
+
   const myList = (isAdmin ? allBookings : myBookings) as Booking[];
   const sopsGenerated = myList.filter((b) => b.sop_path).length;
   const myUpcoming = myList.filter((b) => isFuture(b.start_time)).length;
@@ -56,6 +71,18 @@ export default function Dashboard() {
 
   const [activeTile, setActiveTile] = useState<TileKey | null>(null);
   const toggleTile = (k: TileKey) => setActiveTile((cur) => (cur === k ? null : k));
+
+  // Per-user "this week" metrics + a live activity stream.
+  const weekBookings = myList.filter((b) => withinDays(b.start_time, 7)).length;
+  const hoursBooked = Math.round(
+    myList.filter((b) => b.status !== "cancelled").reduce((acc, b) => acc + durationHours(b), 0),
+  );
+  const activity = buildActivity({
+    isAdmin,
+    bookings: myList,
+    hitl: (myReq?.hitl ?? []) as ActivityHitl[],
+    autos: (autos ?? []) as ActivityAuto[],
+  });
 
   return (
     <>
@@ -155,6 +182,16 @@ export default function Dashboard() {
               emptyText="You have no bookings yet — start one from Book a session." />
           )}
         </div>
+
+        {/* Recent activity — live stream + this-week metrics */}
+        <RecentActivity
+          items={activity}
+          isAdmin={isAdmin}
+          weekBookings={weekBookings}
+          hoursBooked={hoursBooked}
+          upcoming={myUpcoming}
+          sops={sopsGenerated}
+        />
 
         {/* Campus & Facility — engaging, AI-digested, all users (moved below the working surface) */}
         {feed && (
@@ -602,4 +639,202 @@ function isFuture(v: unknown): boolean {
 function parseCtx(v: unknown): { analysis_goal?: string; material_type?: string } | null {
   if (typeof v !== "string") return (v && typeof v === "object" ? (v as { analysis_goal?: string }) : null);
   try { return JSON.parse(v); } catch { return null; }
+}
+
+function durationHours(b: Booking): number {
+  try {
+    const s = new Date(String(b.start_time)).getTime();
+    const e = new Date(String(b.end_time)).getTime();
+    const h = (e - s) / 3600000;
+    return Number.isFinite(h) && h > 0 ? h : 0;
+  } catch { return 0; }
+}
+
+function withinDays(v: unknown, days: number): boolean {
+  try {
+    const t = new Date(String(v)).getTime();
+    const diff = Math.abs(t - Date.now());
+    return diff <= days * 86400000;
+  } catch { return false; }
+}
+
+// Relative timestamp that reads naturally for both past and near-future events,
+// so the feed feels live whether a session just ran or is coming up shortly.
+function relTime(ts: number): string {
+  if (!Number.isFinite(ts)) return "";
+  const diff = ts - Date.now();
+  const past = diff <= 0;
+  const m = Math.round(Math.abs(diff) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return past ? `${m}m ago` : `in ${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 24) return past ? `${h}h ago` : `in ${h}h`;
+  const d = Math.round(h / 24);
+  if (d < 7) return past ? `${d}d ago` : `in ${d}d`;
+  return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// ============================================================================
+// Recent activity feed
+// ============================================================================
+type ActivityHitl = { status?: string; detail?: string; created_at?: string; payload?: unknown };
+type ActivityAuto = { kind?: string; status?: string; detail?: string; created_at?: string };
+
+type ActivityItem = {
+  ts: number;
+  tone: "ok" | "info" | "warn" | "neutral";
+  icon: React.ReactNode;
+  title: string;
+  detail: string;
+};
+
+function buildActivity({
+  isAdmin, bookings, hitl, autos,
+}: {
+  isAdmin: boolean;
+  bookings: Booking[];
+  hitl: ActivityHitl[];
+  autos: ActivityAuto[];
+}): ActivityItem[] {
+  const items: ActivityItem[] = [];
+  const ms = (v: unknown) => new Date(String(v)).getTime();
+
+  // Bookings → "session booked" + "SOP generated" events.
+  for (const b of bookings) {
+    const ctx = parseCtx(b.experiment_context);
+    const instr = String(b.instrument_name ?? b.instrument_id ?? "instrument");
+    const who = isAdmin ? `${String(b.researcher_name ?? "Researcher")} · ` : "";
+    const goal = ctx?.analysis_goal ? ` — ${ctx.analysis_goal}` : "";
+    const createdTs = ms(b.created_at ?? b.start_time);
+    if (Number.isFinite(createdTs)) {
+      const cancelled = b.status === "cancelled";
+      items.push({
+        ts: createdTs,
+        tone: cancelled ? "neutral" : "ok",
+        icon: cancelled ? <CalendarDays className="w-3.5 h-3.5" /> : <CalendarPlus className="w-3.5 h-3.5" />,
+        title: cancelled ? "Booking cancelled" : "Session booked",
+        detail: `${who}${instr}${goal}`,
+      });
+    }
+    if (b.sop_path) {
+      items.push({
+        ts: ms(b.start_time),
+        tone: "info",
+        icon: <FileText className="w-3.5 h-3.5" />,
+        title: "SOP generated",
+        detail: `${who}${instr}`,
+      });
+    }
+  }
+
+  // HITL requests (non-admin view).
+  for (const h of hitl) {
+    const ts = ms(h.created_at);
+    if (!Number.isFinite(ts)) continue;
+    const st = (h.status ?? "pending").toLowerCase();
+    const tone: ActivityItem["tone"] =
+      st === "approved" || st === "completed" ? "ok" :
+      st === "denied" ? "warn" : "info";
+    items.push({
+      ts, tone,
+      icon: <CheckCircle2 className="w-3.5 h-3.5" />,
+      title: `Request ${st}`,
+      detail: h.detail || "Review request",
+    });
+  }
+
+  // Facility automations (admin view) — emails, syncs, work orders.
+  for (const a of autos) {
+    const ts = ms(a.created_at);
+    if (!Number.isFinite(ts)) continue;
+    const kind = a.kind ?? "";
+    const tone: ActivityItem["tone"] =
+      a.status === "failed" ? "warn" : kind === "work_order" ? "warn" : "info";
+    const icon =
+      kind === "email" ? <Mail className="w-3.5 h-3.5" /> :
+      kind === "work_order" ? <Wrench className="w-3.5 h-3.5" /> :
+      kind === "hitl_request" ? <CheckCircle2 className="w-3.5 h-3.5" /> :
+      <RefreshCw className="w-3.5 h-3.5" />;
+    items.push({
+      ts, tone, icon,
+      title: kind ? kind.replace(/_/g, " ") : "automation",
+      detail: a.detail || a.status || "",
+    });
+  }
+
+  return items.sort((a, b) => b.ts - a.ts).slice(0, 8);
+}
+
+function RecentActivity({
+  items, isAdmin, weekBookings, hoursBooked, upcoming, sops,
+}: {
+  items: ActivityItem[];
+  isAdmin: boolean;
+  weekBookings: number;
+  hoursBooked: number;
+  upcoming: number;
+  sops: number;
+}) {
+  const toneCls = (t: ActivityItem["tone"]) =>
+    t === "ok" ? "bg-ok-50 text-ok-700" :
+    t === "warn" ? "bg-warn-50 text-warn-700" :
+    t === "info" ? "bg-info-50 text-info-700" : "bg-ink-100 text-ink-500";
+  return (
+    <section className="card overflow-hidden">
+      <div className="card-header">
+        <h2 className="font-display text-[15px] font-semibold flex items-center gap-2">
+          <Activity className="w-4 h-4 text-navy-700" />
+          {isAdmin ? "Facility activity" : "Your recent activity"}
+        </h2>
+        <span className="pill bg-ok-50 text-ok-700 border border-ok-200 inline-flex items-center gap-1">
+          <Radio className="w-3 h-3 animate-pulse" /> Live
+        </span>
+      </div>
+
+      {/* This-week metric strip */}
+      <div className="grid grid-cols-3 divide-x divide-ink-200 border-b border-ink-200">
+        <PulseStat label="This week" value={weekBookings} sub="sessions" />
+        <PulseStat label="Upcoming" value={upcoming} sub="booked" />
+        <PulseStat label={isAdmin ? "Hours booked" : "My hours"} value={hoursBooked} sub="hrs total" />
+      </div>
+
+      {items.length === 0 ? (
+        <div className="px-5 py-10 text-center text-sm text-ink-500">
+          No activity yet — book a session to get started.
+        </div>
+      ) : (
+        <ul className="divide-y divide-ink-100 max-h-[360px] overflow-y-auto">
+          {items.map((it, i) => (
+            <li key={i} className="px-5 py-3 flex items-start gap-3">
+              <span className={clsx("mt-0.5 w-7 h-7 rounded-lg flex items-center justify-center shrink-0", toneCls(it.tone))}>
+                {it.icon}
+              </span>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-ink-900 capitalize leading-tight">{it.title}</p>
+                <p className="text-xs text-ink-500 mt-0.5 truncate">{it.detail}</p>
+              </div>
+              <span className="text-[11px] text-ink-400 font-mono shrink-0 flex items-center gap-1 mt-0.5">
+                <Clock className="w-3 h-3" /> {relTime(it.ts)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {sops > 0 && (
+        <div className="px-5 py-2.5 bg-ink-50/60 text-[11px] text-ink-500 border-t border-ink-100">
+          {sops} SOP{sops === 1 ? "" : "s"} auto-generated for {isAdmin ? "the facility" : "your sessions"}.
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PulseStat({ label, value, sub }: { label: string; value: number; sub: string }) {
+  return (
+    <div className="px-5 py-3">
+      <p className="text-[10px] font-semibold tracking-wider text-ink-500 uppercase">{label}</p>
+      <p className="text-xl font-bold tabular-nums text-ink-900 leading-none mt-1">{value}</p>
+      <p className="text-[10px] text-ink-400 mt-0.5">{sub}</p>
+    </div>
+  );
 }

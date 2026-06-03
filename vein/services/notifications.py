@@ -17,49 +17,62 @@ import logging
 logger = logging.getLogger("vein.notifications")
 
 # --- Curated CSM content (real, with references) ---------------------------
+# Curated from the live Mines newsroom (minesnewsroom.com), refreshed for the
+# June 2026 demo. Every item links to its real source article. Ordered newest
+# first and skewed toward instrumentation / critical-minerals / facilities
+# content that's directly relevant to the SIF and to LODE.
 ANNOUNCEMENTS: list[dict] = [
     {
-        "title": "Mines launches Critical Minerals Hub with National Laboratory of the Rockies",
-        "body": "A new 50,000 sq ft lab + high-bay facility will accelerate the full "
-                "critical-minerals value chain — from resource development and processing "
-                "to manufacturing, recycling and workforce development.",
-        "tag": "Partnership",
-        "date": "2026-05-06",
-        "url": "https://www.minesnewsroom.com/newsroom",
+        "title": "Mines & ElementUSA win $67M DOE award to build rare-earth processing plant",
+        "body": "The U.S. Department of Energy is funding a Louisiana facility to process rare "
+                "earth elements and recover critical minerals — extending Mines' lead across "
+                "the full critical-minerals value chain.",
+        "tag": "Critical Minerals",
+        "date": "2026-06-02",
+        "url": "https://www.minesnewsroom.com/news/colorado-school-mines-and-elementusa-awarded-67m-doe-construction-rare-earth-processing-plant",
     },
     {
-        "title": "2026 Faculty Awards recognize teaching, research and mentorship",
-        "body": "University Distinguished Professor Rob Braun received the Faculty Excellence "
-                "Award for pioneering work in fuel cells, hydrogen and energy-systems modeling, "
-                "backed by nearly $30M in external funding.",
-        "tag": "Awards",
-        "date": "2026-04-28",
-        "url": "https://www.minesnewsroom.com/news/2026-faculty-awards-recognize-excellence-teaching-research-and-mentorship",
+        "title": "Mark Van Dyke named Vice President for Research",
+        "body": "Van Dyke will lead the university's research portfolio spanning energy, "
+                "critical minerals, quantum and advanced materials — the domains the Shared "
+                "Instrumentation Facility supports every day.",
+        "tag": "Leadership",
+        "date": "2026-06-02",
+        "url": "https://www.minesnewsroom.com/news/mark-van-dyke-named-vice-president-research-colorado-school-mines",
     },
     {
-        "title": "New Nature Synthesis paper opens a field of porous-materials chemistry",
-        "body": "A Mines-led study reveals a method to build porous materials that could seed "
-                "an entirely new field of materials chemistry.",
-        "tag": "Research",
-        "date": "2026-04-15",
-        "url": "https://www.minesnewsroom.com/newsroom",
-    },
-    {
-        "title": "Historic Edgar Mine to host a quantum-computing cryolab",
-        "body": "Part of the dark, dusty gold-mine tunnel is being turned into a cryolab — a "
-                "stable, ultra-cold environment to run quantum-computing experiments.",
-        "tag": "Research",
-        "date": "2026-03-02",
-        "url": "https://www.cpr.org/2026/03/02/colorado-school-of-mines-quantum-lab/",
-    },
-    {
-        "title": "Geophysics junior wins 2026 Goldwater Scholarship",
-        "body": "Anna Williams was awarded one of the most prestigious STEM undergraduate "
-                "scholarships for her work on air-sea interactions in intense tropical cyclones "
-                "(part of a $9M Office of Naval Research project).",
+        "title": "13 Mines students and alumni win NSF Graduate Research Fellowships",
+        "body": "This year's recipients are pursuing work from quantum sensors to wildfire "
+                "prevention, backed by the NSF's flagship graduate fellowship.",
         "tag": "Students",
-        "date": "2026-03-28",
-        "url": "https://www.minesnewsroom.com/news/mines-geophysics-student-wins-2026-goldwater-scholarship",
+        "date": "2026-05-29",
+        "url": "https://www.minesnewsroom.com/news/13-mines-students-alumni-win-nsf-graduate-research-fellowships",
+    },
+    {
+        "title": "$6.56M structural-modeling license expands geology instrumentation toolset",
+        "body": "An educational license gives geology students and faculty advanced modeling "
+                "software to test and validate structural data alongside lab characterization.",
+        "tag": "Facility",
+        "date": "2026-05-27",
+        "url": "https://www.minesnewsroom.com/news/modeling-tools-allow-mines-geology-students-faculty-test-and-validate-structural-data-1",
+    },
+    {
+        "title": "How Mines is positioned to lead the critical-minerals conversation",
+        "body": "Leveraging 150 years of expertise plus a new 50,000 sq ft innovation & "
+                "commercialization hub, Mines is tackling U.S. critical-minerals supply-chain "
+                "challenges from exploration to processing.",
+        "tag": "Critical Minerals",
+        "date": "2026-05-26",
+        "url": "https://www.minesnewsroom.com/news/rush-how-mines-positioned-lead-critical-minerals-conversation-exploration-and-processing",
+    },
+    {
+        "title": "USGS–Mines Energy & Minerals Research Facility nears completion",
+        "body": "The 190,000 sq ft building — set to open Fall 2026 — will house ~250 USGS "
+                "researchers with 68 Mines researchers and 150 students working side by side on "
+                "energy and mineral-resource questions.",
+        "tag": "Facility",
+        "date": "2026-05-20",
+        "url": "https://www.minesnewsroom.com/news/colorado-school-mines-and-usgs-join-forces-address-geological-and-mineral-resource-questions",
     },
 ]
 
@@ -91,30 +104,33 @@ CIRCULARS: list[dict] = [
 FACTS: list[str] = [
     "Mines' Shared Instrumentation Facility spans 14 core areas — from atom-probe "
     "tomography and micro-CT to nanofabrication cleanrooms.",
-    "Founded in 1874, Colorado School of Mines in Golden, CO is a top public university "
-    "for earth, energy and the environment.",
-    "The Edgar Experimental Mine in Idaho Springs is a real underground teaching mine "
-    "used for hands-on instruction and research.",
-    "SIF mass-spec includes a Thermo Orbitrap Exploris 240 and a Delta-Q isotope-ratio MS.",
+    "The Mineral & Materials Characterization Facility (CMRS) pairs SEM-EDS, XRD and "
+    "ICP-MS for full mineral-to-microstructure analysis.",
+    "The USGS–Mines Energy & Minerals Research Facility (190,000 sq ft) opens Fall 2026, "
+    "co-locating ~250 USGS and 68 Mines researchers.",
+    "Mines' new 50,000 sq ft Critical Minerals Innovation & Commercialization Hub takes "
+    "ideas from bench-scale proof-of-concept to pilot demonstration.",
     "The atom-probe core runs a Cameca LEAP 4000X Si for near-atomic 3D composition maps.",
 ]
 
 RESEARCH_THEMES: list[dict] = [
-    {"theme": "Critical minerals", "detail": "Resource → processing → manufacturing → recycling, end-to-end."},
-    {"theme": "Hydrogen & energy systems", "detail": "Fuel cells and energy-systems modeling."},
-    {"theme": "Quantum materials", "detail": "Cryogenic platforms for quantum-computing experiments."},
-    {"theme": "Porous materials chemistry", "detail": "New synthesis routes (Nature Synthesis, 2026)."},
+    {"theme": "Critical minerals", "detail": "Exploration → processing → manufacturing → recycling, end-to-end."},
+    {"theme": "Rare-earth recovery", "detail": "$67M DOE rare-earth processing plant with ElementUSA."},
+    {"theme": "Energy & minerals (USGS)", "detail": "Joint 190,000 sq ft research facility opening Fall 2026."},
+    {"theme": "Quantum & sensing", "detail": "NSF-fellowship work on quantum sensors and materials."},
+    {"theme": "Space resources", "detail": "$5M Angel Family Foundation gift advancing planetary tech."},
 ]
 
 
 def _fallback_digest() -> str:
     return (
-        "Good day from the Mines Shared Instrumentation Facility. Big news this month: "
-        "the new Critical Minerals Hub with the National Laboratory of the Rockies, a "
-        "Nature Synthesis breakthrough in porous materials, and a quantum cryolab taking "
-        "shape inside the historic Edgar Mine. On the floor: book instrument time through "
-        "LODE, finish your safety training first, and route any HF/perchloric work through "
-        "EH&S. Have a productive day in the lab."
+        "Good day from the Mines Shared Instrumentation Facility. Big news this week: a "
+        "$67M DOE award with ElementUSA to build a rare-earth processing plant, a new "
+        "Vice President for Research, and 13 students and alumni winning NSF Graduate "
+        "Research Fellowships. The USGS–Mines Energy & Minerals Research Facility is on "
+        "track to open this fall. On the floor: book instrument time through LODE, finish "
+        "your safety training first, and route any HF/perchloric work through EH&S. Have a "
+        "productive day in the lab."
     )
 
 

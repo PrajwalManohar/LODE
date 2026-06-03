@@ -9,6 +9,7 @@ import {
   ShieldAlert,
   AlertTriangle,
   Sparkles,
+  Shield,
 } from "lucide-react";
 import clsx from "clsx";
 import { api, ExperimentContext } from "../lib/api";
@@ -140,6 +141,24 @@ export default function IntakeForm() {
       />
 
       <PageBody>
+        <div className="rounded-xl border border-info-600/30 bg-info-50/60 px-4 py-3 flex items-start gap-3 text-xs text-ink-700">
+          <Shield className="w-4 h-4 text-info-700 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="font-semibold text-ink-900 mb-0.5">
+              Purpose of processing — what happens with this form
+            </p>
+            <p>
+              Your description is sent to Google Gemini for instrument fit scoring and
+              SOP drafting. Name, email, and group are <em>redacted</em> before
+              transit; bookings are stored in Supabase under row-level security; the
+              audit log records every escalation. Manage or delete your data from{" "}
+              <Link to="/profile" className="font-semibold underline text-info-700 hover:text-navy-700">
+                Profile → Privacy &amp; Compliance
+              </Link>{" "}
+              (GDPR Art. 15 / 17 / 20 · FERPA §99.10).
+            </p>
+          </div>
+        </div>
         <form
           onSubmit={(e) => {
             e.preventDefault();

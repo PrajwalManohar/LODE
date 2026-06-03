@@ -1,3 +1,5 @@
+import { supabase } from "./supabase";
+
 const API = "/api";
 
 export interface Citation {
@@ -140,8 +142,20 @@ export interface Instrument {
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  // Attach the Supabase JWT to every API call so the backend can authorize
+  // /api/me/* (and admin endpoints in production). The data layer expects
+  // a Bearer token via Authorization header — see backend/auth.py.
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  const authHeaders: Record<string, string> = token
+    ? { Authorization: `Bearer ${token}` }
+    : {};
   const res = await fetch(`${API}${url}`, {
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders,
+      ...init?.headers,
+    },
     ...init,
   });
   if (!res.ok) throw new Error(await res.text());
@@ -215,6 +229,27 @@ export const api = {
       last_update: string | null;
     }>("/admin/rag"),
   reindex: () => fetchJson<{ indexed: number; total: number }>("/admin/rag/reindex", { method: "POST" }),
+  ragInventory: () =>
+    fetchJson<{
+      total_chunks: number;
+      embedding_model: string;
+      vector_dims: number | null;
+      by_type: { corpus_type: string; chunks: number }[];
+      by_source: { source: string; corpus_type: string; instrument_id: string | null; chunks: number }[];
+    }>("/admin/rag/inventory"),
+  ragSearch: (q: string, opts?: { k?: number; instrument?: string; corpus?: string }) => {
+    const p = new URLSearchParams({ q });
+    if (opts?.k) p.set("k", String(opts.k));
+    if (opts?.instrument) p.set("instrument", opts.instrument);
+    if (opts?.corpus) p.set("corpus", opts.corpus);
+    return fetchJson<{
+      query: string;
+      results: {
+        similarity: number; source: string; section: string; page: string;
+        corpus_type: string; instrument_id: string; text: string;
+      }[];
+    }>(`/admin/rag/search?${p.toString()}`);
+  },
   runs: () => fetchJson<Record<string, unknown>[]>("/admin/runs"),
   audit: (limit = 50) => fetchJson<AgentDecision[]>(`/admin/audit?limit=${limit}`),
   equity: (weeks = 4) =>
@@ -325,4 +360,54 @@ export const api = {
         body: JSON.stringify({ reason }),
       },
     ),
+
+  // ---- Privacy & Compliance (GDPR Art. 15 / 17 / 20, FERPA §99.10) ----
+  exportMyData: (email: string) =>
+    fetchJson<MeExport>(`/me/export?email=${encodeURIComponent(email)}`),
+  deleteMyAccount: (email: string) =>
+    fetchJson<{ ok: boolean; deleted_profile: boolean; deleted_bookings: number; deleted_auth_user: boolean; message: string }>(
+      `/me/delete?email=${encodeURIComponent(email)}`,
+      { method: "POST" },
+    ),
+  myAuditTrail: (email: string, limit = 50) =>
+    fetchJson<{ rows: AuditRow[] }>(
+      `/me/audit?email=${encodeURIComponent(email)}&limit=${limit}`,
+    ),
+  safetyPreview: (text: string, context?: Record<string, unknown>) =>
+    fetchJson<SafetyPreview>("/me/safety-preview", {
+      method: "POST",
+      body: JSON.stringify({ text, context }),
+    }),
 };
+
+export interface AuditRow {
+  ts: string;
+  event: string;
+  actor: string | null;
+  subject: string | null;
+  detail: Record<string, unknown>;
+}
+
+export interface MeExport {
+  exported_at: string;
+  profile: Record<string, unknown>;
+  bookings: Record<string, unknown>[];
+  hitl_requests: AutomationEvent[];
+  notice: string;
+}
+
+export interface SafetyPreview {
+  input_chars: number;
+  max_chars: number;
+  guardrail_allowed: boolean;
+  guardrail_reasons: string[];
+  pii_redacted_preview: string;
+  hazardous_keywords_detected: string[];
+  safety_gate_would_escalate: boolean;
+  confidence_floor_pct: number;
+  controls: Record<string, unknown>;
+  context_before?: Record<string, unknown> | null;
+  context_after_redaction?: Record<string, unknown> | null;
+  context_field_diff: { field: string; original: string; redacted: string; masked: boolean }[];
+  llm_prompt_preview: string;
+}

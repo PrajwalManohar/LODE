@@ -9,6 +9,7 @@ import {
   AlertTriangle,
   ArrowRight,
   ClipboardList,
+  Shield,
 } from "lucide-react";
 import clsx from "clsx";
 import { api, ChatResponse, ExperimentContext, Citation } from "../lib/api";
@@ -146,6 +147,25 @@ export default function IntakeChat() {
       />
 
       <PageBody>
+        <div className="rounded-xl border border-info-600/30 bg-info-50/60 px-4 py-3 flex items-start gap-3 text-xs text-ink-700">
+          <Shield className="w-4 h-4 text-info-700 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="font-semibold text-ink-900 mb-0.5">
+              Purpose of processing — what happens with this conversation
+            </p>
+            <p>
+              Your messages are sent to Google Gemini for instrument fit scoring and
+              SOP drafting. Name, email, and group are <em>redacted</em> before
+              transit; the transcript is not retained outside the resulting booking
+              record. Manage or delete your data from{" "}
+              <Link to="/profile" className="font-semibold underline text-info-700 hover:text-navy-700">
+                Profile → Privacy &amp; Compliance
+              </Link>{" "}
+              (GDPR Art. 15 / 17 / 20 · FERPA §99.10).
+            </p>
+          </div>
+        </div>
+
         {/* Researcher chips */}
         <div className="card-pad grid md:grid-cols-2 lg:grid-cols-4 gap-3">
           <Field label="Your name (from your account)">

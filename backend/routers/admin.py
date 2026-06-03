@@ -118,6 +118,71 @@ def rag_chunks(
     return [dict(r) for r in rows]
 
 
+@router.get("/rag/inventory")
+def rag_inventory():
+    """What the RAG is indexed on: chunk counts by corpus_type and by source
+    document. Powers the admin 'Knowledge base' corpus inventory."""
+    from vein.db.database import get_conn
+
+    with get_conn() as conn:
+        by_type = [
+            dict(r) for r in conn.execute(
+                "SELECT corpus_type, COUNT(*) AS chunks FROM documents "
+                "GROUP BY corpus_type ORDER BY chunks DESC"
+            ).fetchall()
+        ]
+        by_source = [
+            dict(r) for r in conn.execute(
+                "SELECT source, corpus_type, MAX(instrument_id) AS instrument_id, "
+                "COUNT(*) AS chunks FROM documents GROUP BY source, corpus_type "
+                "ORDER BY corpus_type, source"
+            ).fetchall()
+        ]
+        total = conn.execute("SELECT COUNT(*) AS n FROM documents").fetchone()["n"]
+        dims = conn.execute(
+            "SELECT vector_dims(embedding) AS d FROM documents LIMIT 1"
+        ).fetchone()
+    return {
+        "total_chunks": total,
+        "embedding_model": "all-MiniLM-L6-v2",
+        "vector_dims": (dims or {}).get("d") if dims else None,
+        "by_type": by_type,
+        "by_source": by_source,
+    }
+
+
+@router.get("/rag/search")
+def rag_search(
+    q: str,
+    k: int = 5,
+    instrument: str | None = None,
+    corpus: str | None = None,
+):
+    """Live semantic retrieval: embed `q` with all-MiniLM-L6-v2 and run the
+    pgvector match_documents() cosine search. Returns the exact chunks the
+    agents would receive, with cosine similarity — the demoable RAG path."""
+    from vein.rag.indexer import query_corpus
+
+    q = (q or "").strip()
+    if not q:
+        return {"query": q, "results": []}
+    rows = query_corpus(q, n_results=max(1, min(k, 20)),
+                        instrument_id=instrument or None, corpus_type=corpus or None)
+    results = [
+        {
+            "similarity": round(1.0 - float(r.get("distance", 1.0)), 4),
+            "source": r.get("source", ""),
+            "section": r.get("section", ""),
+            "page": r.get("page", ""),
+            "corpus_type": r.get("corpus_type", ""),
+            "instrument_id": r.get("instrument_id", ""),
+            "text": r.get("text", ""),
+        }
+        for r in rows
+    ]
+    return {"query": q, "results": results}
+
+
 @router.get("/runs")
 def runs():
     return get_run_logs(100)

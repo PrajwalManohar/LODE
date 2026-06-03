@@ -59,6 +59,34 @@ def redact_obj(obj: Any) -> Any:
     return obj
 
 
+# Fields on ExperimentContext that carry personally-identifying or
+# group-affiliation data we don't want flowing to a third-party LLM. GDPR
+# Art. 5 (data minimisation) + Art. 32 (security of processing).
+_PII_CTX_FIELDS = ("researcher_name", "researcher_email", "research_group")
+
+
+def redact_ctx_for_llm(ctx_dict: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of an ExperimentContext-style dict with PII fields masked.
+
+    Used before serializing the structured context into the LLM user prompt.
+    The un-redacted ctx is kept for the booking pipeline (it has to know who
+    to email); only the LLM-facing copy is sanitised.
+    """
+    if not isinstance(ctx_dict, dict):
+        return ctx_dict  # type: ignore[return-value]
+    masked = dict(ctx_dict)
+    for field in _PII_CTX_FIELDS:
+        if masked.get(field):
+            masked[field] = f"[REDACTED:{field.upper()}]"
+    # Free-text fields can still contain pasted identifiers — run the regex
+    # redactor over those too.
+    for free in ("notes", "material_type", "analysis_goal",
+                 "surface_condition", "coating_status", "sample_dimensions"):
+        if isinstance(masked.get(free), str):
+            masked[free] = redact(masked[free])
+    return masked
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Audit log — append-only JSONL, one event per line.
 # Each row: {"ts","event","actor","subject","detail"}

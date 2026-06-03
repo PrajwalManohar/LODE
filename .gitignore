@@ -71,12 +71,22 @@ service-account*.json
 
 # ─── LODE runtime artifacts (regenerated on every demo run) ────────────────
 # The Postgres database is authoritative; everything below is scratch.
-data/vein.db                # legacy SQLite (pre-Supabase)
-data/chroma/                # ChromaDB index — bootstrap rebuilds on startup
-data/airtable_queue/        # Local Airtable queue when no API key
-data/email_outbox/          # Local email outbox when no transport configured
-data/output/                # Generated SOPs (.docx) from booking confirms
-data/_*.json                # Scratch JSON payloads written by debug scripts
+# NOTE: git does NOT support inline (trailing) comments in .gitignore — each
+# comment must be on its own line, or the pattern silently stops matching.
+# legacy SQLite (pre-Supabase)
+data/vein.db
+# ChromaDB index — bootstrap rebuilds on startup
+data/chroma/
+# Local Airtable queue when no API key
+data/airtable_queue/
+# Local email outbox when no transport configured
+data/email_outbox/
+# Generated SOPs (.docx) from booking confirms
+data/output/
+# Privacy audit log — runtime scratch, may contain researcher emails
+data/audit/
+# Scratch JSON payloads written by debug scripts
+data/_*.json
 data/*.sqlite*
 data/*.bak
 

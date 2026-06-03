@@ -22,11 +22,15 @@ from datetime import datetime
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, EmailStr
 
+from backend.auth import CurrentUser, current_user
 from vein.agents.graph import run_confirm_graph
+from vein.agents.safety import detect_hazardous_materials, HAZMAT_KEYWORDS, CONFIDENCE_FLOOR
 from vein.config import settings
+from vein.services.guardrails import check_input, MAX_INPUT_CHARS
+from vein.services.privacy import redact, redact_ctx_for_llm
 from vein.db.database import (
     get_automation_event,
     get_automation_events,
@@ -42,6 +46,25 @@ from vein.services.privacy import audit
 
 router = APIRouter()
 logger = logging.getLogger("backend.me")
+
+
+def _require_self_or_admin(email: str, caller: CurrentUser) -> None:
+    """Enforce that the JWT caller is the subject of the request, or admin.
+
+    GDPR Art. 15 / 17 require the data subject to be authenticated. When JWT
+    verification is not configured (demo mode), this is a no-op so the demo
+    still runs unauthenticated — production must set SUPABASE_JWT_SECRET.
+    """
+    if not settings.supabase_jwt_secret:
+        return
+    if caller.is_admin:
+        return
+    if (caller.email or "").lower() != email.strip().lower():
+        raise HTTPException(
+            status_code=403,
+            detail="You can only access your own data. Sign in as that user "
+                   "or contact an admin.",
+        )
 
 
 def _payload(event: dict) -> dict:
@@ -87,8 +110,12 @@ def _maintenance_for_email(email: str) -> list[dict]:
 
 
 @router.get("/requests")
-def list_requests(email: str = Query(..., description="Researcher email")):
+def list_requests(
+    email: str = Query(..., description="Researcher email"),
+    caller: CurrentUser = Depends(current_user),
+):
     """Return everything 'My Requests' should show for one user."""
+    _require_self_or_admin(email, caller)
     return {
         "hitl": _hitl_for_email(email),
         "maintenance": _maintenance_for_email(email),
@@ -212,12 +239,16 @@ class DeleteResponse(BaseModel):
 
 
 @router.get("/export")
-def export_my_data(email: str = Query(..., description="Researcher email")):
+def export_my_data(
+    email: str = Query(..., description="Researcher email"),
+    caller: CurrentUser = Depends(current_user),
+):
     """Return everything the system holds for this user (profile, bookings,
     HITL requests, audit excerpts). GDPR Art. 20 — data portability."""
     email = email.strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="email required")
+    _require_self_or_admin(email, caller)
 
     with get_conn() as conn:
         profile = conn.execute(
@@ -273,7 +304,10 @@ def _delete_auth_user_in_supabase(user_id: str) -> bool:
 
 
 @router.post("/delete", response_model=DeleteResponse)
-def delete_my_account(email: str = Query(..., description="Researcher email")):
+def delete_my_account(
+    email: str = Query(..., description="Researcher email"),
+    caller: CurrentUser = Depends(current_user),
+):
     """Hard-delete the user's bookings, profile, and Supabase auth row.
 
     GDPR Art. 17 ('right to be forgotten'). We log the deletion intent to the
@@ -283,6 +317,7 @@ def delete_my_account(email: str = Query(..., description="Researcher email")):
     email = email.strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="email required")
+    _require_self_or_admin(email, caller)
 
     user_id: Optional[str] = None
     deleted_bookings = 0
@@ -328,8 +363,13 @@ def delete_my_account(email: str = Query(..., description="Researcher email")):
 
 
 @router.get("/audit")
-def my_audit(email: str = Query(...), limit: int = 50):
+def my_audit(
+    email: str = Query(...),
+    limit: int = 50,
+    caller: CurrentUser = Depends(current_user),
+):
     """Return audit events where the caller is actor or subject."""
+    _require_self_or_admin(email, caller)
     from vein.services.privacy import read_audit
     email_lower = email.strip().lower()
     rows = [
@@ -613,4 +653,148 @@ def request_booking_cancel(
     return BookingChangeResponse(
         ok=True, event_id=int(event["id"]) if event else 0,
         message="Cancellation request submitted. An admin will review and you'll be emailed when a decision is made.",
+    )
+
+
+# ===========================================================================
+# Safety / governance preview — runs all the input-side controls against a
+# sample of text and returns what each one does, WITHOUT creating any booking
+# or sending any email. Designed for the Profile → Privacy demo so a reviewer
+# can see the controls fire in real time.
+# ===========================================================================
+class SafetyPreviewRequest(BaseModel):
+    text: str
+    # Optional structured context — when supplied, we also run the
+    # ExperimentContext-level redactor (researcher_name / email / group) and
+    # return the before/after so the user can see exactly which identity fields
+    # are masked before any prompt leaves the backend.
+    context: Optional[dict] = None
+
+
+class CtxField(BaseModel):
+    field: str
+    original: str
+    redacted: str
+    masked: bool
+
+
+class SafetyPreviewResponse(BaseModel):
+    input_chars: int
+    max_chars: int
+    guardrail_allowed: bool
+    guardrail_reasons: list[str]
+    pii_redacted_preview: str
+    hazardous_keywords_detected: list[str]
+    safety_gate_would_escalate: bool
+    confidence_floor_pct: int
+    controls: dict
+    # New: structured-context masking proof (only populated when caller
+    # supplies a context). Shows researcher fields masked + free-text scrubbed.
+    context_before: Optional[dict] = None
+    context_after_redaction: Optional[dict] = None
+    context_field_diff: list[CtxField] = []
+    # The literal prompt fragment we'd embed into the LLM call, after both
+    # message-level and ctx-level redaction. This is the "smoking gun" the
+    # reviewer wants to see — the exact bytes that leave the trust boundary.
+    llm_prompt_preview: str = ""
+
+
+@router.post("/safety-preview", response_model=SafetyPreviewResponse)
+def safety_preview(req: SafetyPreviewRequest):
+    """Dry-run the input-side governance stack against arbitrary text.
+
+    No persistence. No emails. No LLM call. Returns:
+      * guardrail verdict (prompt-injection / length / sensitive identifiers)
+      * PII redaction preview (what would be sent to the LLM)
+      * hazmat keyword hits
+      * whether the safety gate would escalate to HITL
+      * (when a `context` is supplied) the structured ExperimentContext
+        before/after the LLM-bound redactor, plus the literal prompt
+        fragment that would be sent to Gemini
+
+    Wired into Profile → Privacy so the user can paste text and see what each
+    control does. Aligns with the demo evidence we need for GDPR Art. 32 +
+    HIPAA §164.312(c)(1) "security of processing".
+    """
+    text = req.text or ""
+    verdict = check_input(text)
+    # Mirror the real intake flow: hazmat detection looks at the message AND
+    # every free-text ctx field. Without this, a hazmat keyword declared only
+    # in the ctx notes would silently pass the preview but fire HITL on the
+    # real booking — confusing for the demo.
+    ctx_blobs = []
+    if req.context:
+        for k in ("material_type", "analysis_goal", "notes",
+                  "surface_condition", "coating_status", "sample_dimensions"):
+            v = req.context.get(k)
+            if isinstance(v, str):
+                ctx_blobs.append(v)
+        declared = req.context.get("hazardous_materials") or []
+        if isinstance(declared, list):
+            ctx_blobs.extend(str(d) for d in declared if isinstance(d, str))
+    hazards = detect_hazardous_materials(text, *ctx_blobs)
+
+    ctx_before: Optional[dict] = None
+    ctx_after: Optional[dict] = None
+    diff: list[CtxField] = []
+    llm_prompt = ""
+    if req.context is not None:
+        ctx_before = dict(req.context)
+        ctx_after = redact_ctx_for_llm(ctx_before)
+        # Build a human-readable diff — every field the redactor touched.
+        keys = sorted(set(ctx_before.keys()) | set(ctx_after.keys()))
+        for k in keys:
+            orig = ctx_before.get(k, "")
+            red = ctx_after.get(k, "")
+            if isinstance(orig, (list, dict)):
+                orig_s = str(orig)
+            else:
+                orig_s = "" if orig is None else str(orig)
+            if isinstance(red, (list, dict)):
+                red_s = str(red)
+            else:
+                red_s = "" if red is None else str(red)
+            if orig_s != red_s:
+                diff.append(CtxField(field=k, original=orig_s, redacted=red_s, masked=True))
+        # The literal prompt fragment Agent 1 builds. Mirrors graph.py exactly
+        # so what the reviewer sees here matches what actually goes over the
+        # wire when they later submit a real booking.
+        llm_prompt = (
+            "System: You are LODE Experiment Context Agent at Colorado School "
+            "of Mines. Parse experiment descriptions into the structured "
+            "ExperimentContext schema. Detect hazardous materials …\n\n"
+            f"User:\nHistory: []\nMessage: {redact(text)}\n"
+            f"Context so far: {ctx_after}\nRAG: <retrieved chunks>"
+        )
+
+    return SafetyPreviewResponse(
+        input_chars=len(text),
+        max_chars=MAX_INPUT_CHARS,
+        guardrail_allowed=verdict.allowed,
+        guardrail_reasons=verdict.reasons,
+        pii_redacted_preview=redact(text),
+        hazardous_keywords_detected=hazards,
+        safety_gate_would_escalate=bool(hazards) or not verdict.allowed,
+        confidence_floor_pct=CONFIDENCE_FLOOR,
+        context_before=ctx_before,
+        context_after_redaction=ctx_after,
+        context_field_diff=diff,
+        llm_prompt_preview=llm_prompt,
+        controls={
+            "prompt_injection_patterns": True,
+            "input_length_cap_chars": MAX_INPUT_CHARS,
+            "pii_redaction_categories": ["EMAIL", "PHONE", "SSN", "CARD", "APIKEY"],
+            "hazmat_keyword_count": len(HAZMAT_KEYWORDS),
+            "llm_pii_scrub_for_ctx_fields": [
+                "researcher_name", "researcher_email", "research_group",
+            ],
+            "rag_query_redacted_before_embedding": True,
+            "audit_log_path": "data/audit/audit.jsonl",
+            "hitl_email_on_safety_gate_escalate": True,
+            "data_subject_endpoints": {
+                "access_export": "/api/me/export",
+                "audit_trail": "/api/me/audit",
+                "erasure": "/api/me/delete",
+            },
+        },
     )
